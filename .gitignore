@@ -1,0 +1,58 @@
+# ---------- 系统 ----------
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# ---------- 编辑器 / IDE ----------
+.vscode/*
+!.vscode/settings.json
+.idea/
+*.swp
+
+# ---------- 日志与临时文件 ----------
+*.log
+*.tmp
+*.bak
+*.bak-*
+
+# ---------- Node ----------
+node_modules/
+dist/
+.cache/
+*.tsbuildinfo
+
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ---------- .NET / C# ----------
+bin/
+obj/
+.vs/
+
+# ---------- Unity ----------
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]serSettings/
+*.csproj
+*.pidb
+*.booproj
+
+# ---------- 大体积资产（需要时取消注释）----------
+# *.vrm
+# *.pmx
+# *.gguf
+# *.fbx
+# *.blend1
+
+# ---------- 本地私有 ----------
+.env
+.env.local
+*.local
