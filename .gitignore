@@ -52,6 +52,16 @@ obj/
 # *.fbx
 # *.blend1
 
+# ---------- Git worktree ----------
+.worktrees/
+
+# ---------- 工具产物 ----------
+.superpowers/
+/apps/web/public/assets/
+
+# ---------- 素材（大体积本地资产，不入库）----------
+/素材/
+
 # ---------- 本地私有 ----------
 .env
 .env.local
