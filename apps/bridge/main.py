@@ -10,13 +10,29 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from astrbot.api.star import Context, Star, register
+
+from .adapter import QueueTurnBridge, TurnBridge, run_turn
+from .session import DEFAULT_UMO, resolve_umo
 
 PLUGIN_NAME = "astrbot_plugin_mas3d_game"
 __version__ = "0.1.0"
 
 logger = logging.getLogger("mas3d_game")
+
+
+def configured_umo(config: Any) -> str:
+    """从插件配置里读 umo；配置缺失或不合法时回落到 QQ 私聊会话。"""
+    raw = None
+    if isinstance(config, dict):
+        raw = config.get("umo")
+    elif config is not None:
+        getter = getattr(config, "get", None)
+        if callable(getter):
+            raw = getter("umo", None)
+    return resolve_umo(raw if isinstance(raw, str) else None)
 
 
 @register(
@@ -32,10 +48,52 @@ class Mas3dGamePlugin(Star):
         super().__init__(context)
         self.config = config
         self.degraded = False
+        self.umo = configured_umo(config)
+        self.bridge: TurnBridge | None = None
 
     async def initialize(self) -> None:
-        # Task 12 会在这里注册本机 HTTP/WS 端点
-        logger.info("mas3d_game %s loaded", __version__)
+        self.bridge = self._build_bridge()
+        if self.bridge is None:
+            self.degraded = True
+            logger.warning(
+                "mas3d_game %s 拿不到 AstrBot 的事件队列，对话桥接暂不可用",
+                __version__,
+            )
+        error = getattr(self.bridge, "last_error", None)
+        if error:
+            logger.warning("mas3d_game 桥接初始化有问题：%s", error)
+        logger.info("mas3d_game %s loaded (umo=%s)", __version__, self.umo)
 
     async def terminate(self) -> None:
+        self.bridge = None
         logger.info("mas3d_game %s unloaded", __version__)
+
+    def _build_bridge(self) -> QueueTurnBridge | None:
+        context = self.context
+        getter = getattr(context, "get_event_queue", None)
+        if not callable(getter):
+            return None
+        try:
+            queue = getter()
+        except Exception as exc:  # noqa: BLE001 - 上下文缺失不应让插件加载失败
+            logger.warning("读取 AstrBot 事件队列失败：%s", exc)
+            return None
+        if queue is None:
+            return None
+        return QueueTurnBridge(queue, umo=self.umo)
+
+    async def handle_turn(self, text: str) -> str:
+        """供 Task 12 的 Web API 调用：跑一回合并返回 Monika 的回复文本。"""
+        if self.bridge is None:
+            raise RuntimeError("桥接未初始化")
+        return await run_turn(self.bridge, text)
+
+
+__all__ = [
+    "DEFAULT_UMO",
+    "Mas3dGamePlugin",
+    "PLUGIN_NAME",
+    "configured_umo",
+    "run_turn",
+    "__version__",
+]
