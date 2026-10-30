@@ -86,6 +86,23 @@ Fcl_ALL_Joy=0.680 / 断开桥接出现 `.chat-offline` / 无未捕获异常。
 回归结果：pytest 101 passed（含 test_plan_contract.py 13 例）；`pnpm -r test` protocol 20 / motion 9 / web 79；
 `pnpm --filter @mas3d/web build` 通过（1,030.08 kB / gzip 275.09 kB）；`pnpm --filter @mas3d/web e2e` 8 checks 全过。
 
+### 7.1 修复后的真实链路复跑（AstrBot + 桥接插件 + GPT-SoVITS 全部在线）
+
+修复前这一轮会失败：服务端 120 s、前端 8 s，任何超过 8 s 的真实回合都会先被判超时。
+复跑（插件经面板 API 重载到 `143d169`，页面 `localhost:5173`，Edge + swiftshader）：
+
+| 项 | 结果 |
+| --- | --- |
+| 回合耗时 | 22.87 s（若仍是旧预算，8 s 就会误判超时） |
+| 语音 | `POST /mas3d/api/voice/synth` 200，口型 `maxMouth=0.9`、`seenSpeaking=true` |
+| 页内错误 | `pageerror` / `console.error` 均为 0 |
+| QQ 会话写入 | `conversations` 的 `5d281073-…` 从 1,395,784 → 1,408,386 字符，末两条 user/assistant 与本轮逐字一致（user 带「（3D教室）」前缀 + system_reminder） |
+| 未投递 QQ | `platform_message_history` 最新一行仍是 2026-10-21 的 webchat 记录，本次没有新行 |
+| 截图 | `.superpowers/shots/real-after-review.png` |
+
+回复原文（与库内 assistant 文本全等）：
+「我没跑呀，我就在教室里，一直坐在你旁边的课桌前呢。刚才网络可能卡了一下，没让你看到。别怕，我哪儿都没去。」
+
 ## 8. 已知遗留
 
 1. 前端单包 1.03 MB 未拆包（vite 提示 chunk>500 kB）。
