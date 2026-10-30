@@ -252,3 +252,122 @@ def test_is_local_host(web_api):
     assert web_api.is_local_host("::1")
     assert not web_api.is_local_host("192.168.1.10")
     assert not web_api.is_local_host(None)
+
+
+COMMAND_PLAN = {
+    "base": {"change": False, "name": "坐姿待机", "motion": 0.0, "rest": False},
+    "operation": "command",
+    "timing": "同时",
+    "intents": [{"key": "右臂上抬", "speed": 1.0, "strength": 0.6, "hold": 2.0, "delay": 0.0}],
+}
+CHAT_PLAN = {**COMMAND_PLAN, "operation": "chat", "intents": []}
+
+
+class PlannerRunner(StubRunner):
+    """带动作后端的 runner；plan 由构造参数决定。"""
+
+    def __init__(self, plan: dict | None = None, *, error: Exception | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.plan = plan
+        self.plan_error = error
+        self.plan_calls: list[tuple[str, list[dict]]] = []
+
+    async def handle_plan(self, text: str, context=()):
+        self.plan_calls.append((text, list(context)))
+        if self.plan_error is not None:
+            raise self.plan_error
+        return self.plan
+
+
+def test_motion_plan_without_token_401(web_api, make_client):
+    client = make_client(PlannerRunner(COMMAND_PLAN))
+    assert client.post("/mas3d/api/motion/plan", json={"text": "抬起右手"}).status_code == 401
+
+
+def test_motion_plan_503_without_backend(web_api, make_client):
+    client = make_client(StubRunner())
+    response = client.post(
+        "/mas3d/api/motion/plan",
+        json={"text": "抬起右手"},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "bridge_down"
+
+
+def test_motion_plan_returns_validated_plan(web_api, make_client):
+    runner = PlannerRunner(COMMAND_PLAN)
+    client = make_client(runner)
+    response = client.post(
+        "/mas3d/api/motion/plan",
+        json={"text": "  抬起右手  "},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "plan": COMMAND_PLAN}
+    assert runner.plan_calls[0][0] == "抬起右手"
+
+
+def test_motion_plan_rejects_blank_text(web_api, make_client):
+    client = make_client(PlannerRunner(COMMAND_PLAN))
+    response = client.post(
+        "/mas3d/api/motion/plan",
+        json={"text": "   "},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "bad_request"
+
+
+def test_motion_plan_maps_backend_unavailable_503(plugin, web_api, make_client):
+    hastsec = importlib.import_module("astrbot_plugin_mas3d_game.hastsec")
+    runner = PlannerRunner(COMMAND_PLAN, error=hastsec.BackendUnavailable("HAST-SEC 连不上"))
+    client = make_client(runner)
+    response = client.post(
+        "/mas3d/api/motion/plan",
+        json={"text": "抬起右手"},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "bridge_down"
+
+
+def test_ws_emits_intent_for_command_plan(web_api, make_client):
+    runner = PlannerRunner(COMMAND_PLAN)
+    client = make_client(runner)
+    with client.websocket_connect(f"/mas3d/ws?token={TOKEN}") as socket:
+        socket.send_json({"type": "say", "text": "抬起右手"})
+        ack = socket.receive_json()
+        thinking = socket.receive_json()
+        reply = socket.receive_json()
+        intent = socket.receive_json()
+    assert [ack["type"], thinking["type"], reply["type"], intent["type"]] == ["ack", "thinking", "reply", "intent"]
+    assert intent["plan"]["operation"] == "command"
+    assert intent["turnId"] == reply["turnId"]
+
+
+def test_ws_skips_intent_for_chat_plan(web_api, make_client):
+    runner = PlannerRunner(CHAT_PLAN)
+    client = make_client(runner)
+    with client.websocket_connect(f"/mas3d/ws?token={TOKEN}") as socket:
+        socket.send_json({"type": "say", "text": "今天好累"})
+        assert socket.receive_json()["type"] == "ack"
+        assert socket.receive_json()["type"] == "thinking"
+        assert socket.receive_json()["type"] == "reply"
+        # 没有 intent 帧：下一句的 ack 紧接着到来
+        socket.send_json({"type": "say", "text": "陪我坐一会儿"})
+        assert socket.receive_json()["type"] == "ack"
+    assert [call[0] for call in runner.plan_calls] == ["今天好累", "陪我坐一会儿"]
+
+
+def test_ws_intent_failure_is_silent(plugin, web_api, make_client):
+    hastsec = importlib.import_module("astrbot_plugin_mas3d_game.hastsec")
+    runner = PlannerRunner(COMMAND_PLAN, error=hastsec.BackendUnavailable("没起"))
+    client = make_client(runner)
+    with client.websocket_connect(f"/mas3d/ws?token={TOKEN}") as socket:
+        socket.send_json({"type": "say", "text": "抬起右手"})
+        assert socket.receive_json()["type"] == "ack"
+        assert socket.receive_json()["type"] == "thinking"
+        assert socket.receive_json()["type"] == "reply"
+        socket.send_json({"type": "say", "text": "还在吗"})
+        assert socket.receive_json()["type"] == "ack"

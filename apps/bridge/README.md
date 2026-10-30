@@ -29,6 +29,35 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\link-plugin.ps1 -Force
 
 全部只绑 `127.0.0.1`，令牌存放在 `plugin_data/mas3d/token`（首次启动生成），前端用 `Authorization: Bearer` 或 WS query 传入。
 
+## HAST-SEC 动作后端（可选）
+
+HAST-SEC 是本地动作意图模型：它在自己的浏览器页面里解码轨迹，服务端只输出高层意图 JSON。本项目**只做意图级消费**（拿 `base` + `intents` 自己驱动上臂/前臂骨骼），不引入它的 three 版本与 GB 级运行时。
+
+启动（工作目录必须是 HAST-SEC 项目根）：
+
+```powershell
+cd D:\HAST-SEC-v0.1.1\HAST-SEC-v0.1.1
+node service/start.mjs
+# 日志出现 HAST-SEC v0.1: http://127.0.0.1:8769
+```
+
+确认：
+
+```powershell
+curl.exe http://127.0.0.1:8769/v13-api/status
+# {"runtime":{...},"training":false}
+```
+
+桥接侧的约定：
+
+- 代理端点 `POST /mas3d/api/motion/plan`，转发到 `http://127.0.0.1:8769/v13-api/plan`。
+- 上游强校验 `Origin === "http://" + Host`，httpx/curl 会改写 `Host`，所以用 `http.client` 手写这两个头部（见 `apps/bridge/hastsec.py`）。
+- 入参整形：`generation: "v15"`、`text` ≤ 300 字、`context` ≤ 4 条 / 总长 ≤ 1200 / 单条 ≤ 600，会话 GUID 持久化在 `plugin_data/mas3d/session.json`。
+- 探活 1.5 秒、请求 6 秒（冷启动实测 2.62 s，热态 0.74–1.01 s）；失败冷却 60 秒，冷却期间前端按 `unsupported`/空计划处理，退回 Tier 1 程序化手势。
+- 前端 `apps/web/src/avatar/hastMotion.ts` 把 `side/action/height` 映射成上臂/前臂旋转，遵守 `speed/strength/hold/delay` 与 `timing`，整段结束后回待机。
+
+不启动 HAST-SEC 时游戏照常运行：动作后端返回 `bridge_down`，角色只用 Tier 0 待机与 Tier 1 预制手势。
+
 ## 测试
 
 ```powershell

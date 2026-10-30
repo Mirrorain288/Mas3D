@@ -30,6 +30,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSock
 from fastapi.responses import JSONResponse
 
 from .adapter import TurnDispatchError
+from .hastsec import BackendUnavailable, PlanRejected
 
 MAX_INPUT_CHARS = 300
 """与 packages/protocol/src/frames.ts:30 的 MAX_INPUT_CHARS 保持一致。"""
@@ -38,6 +39,12 @@ RATE_LIMIT_TURNS = 5
 """一个连接在窗口内最多能发几回合。"""
 
 RATE_LIMIT_WINDOW_S = 10.0
+
+PLAN_TIMEOUT_S = 9.0
+"""POST /mas3d/api/motion/plan 的整体预算；HAST-SEC 客户端自己还有更短的超时。"""
+
+MAX_HISTORY = 8
+"""给动作后端看的最近上下文条数（hastsec.build_context 会再收窄到 4 条 / 1200 字）。"""
 
 LOCAL_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
 """允许的来源主机。testclient 只会出现在进程内 ASGI 测试传输里，不可能来自真实 socket。"""
@@ -96,6 +103,44 @@ def create_app(
             "degraded": bool(getattr(runner, "degraded", False)),
         }
 
+    @app.post("/mas3d/api/motion/plan")
+    async def motion_plan(request: Request, _: None = Depends(require_token)) -> JSONResponse:
+        """把玩家的原话交给 HAST-SEC 换一份动作计划（design.md D8）。
+
+        降级语义：HAST-SEC 没起来就 503 + bridge_down，前端照常用 Tier0/Tier1。
+        """
+        try:
+            payload = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse({"ok": False, "code": "bad_request", "message": "body 必须是 JSON"}, status_code=400)
+        text = payload.get("text") if isinstance(payload, dict) else None
+        if not isinstance(text, str):
+            return JSONResponse({"ok": False, "code": "bad_request", "message": "text 必须是字符串"}, status_code=400)
+        cleaned = " ".join(text.split()).strip()
+        if not cleaned:
+            return JSONResponse({"ok": False, "code": "bad_request", "message": "这句话是空的"}, status_code=400)
+        if len(cleaned) > MAX_INPUT_CHARS:
+            return JSONResponse(
+                {"ok": False, "code": "bad_request", "message": f"一次最多 {MAX_INPUT_CHARS} 个字"},
+                status_code=400,
+            )
+        planner = getattr(runner, "handle_plan", None)
+        if planner is None:
+            return JSONResponse({"ok": False, "code": "bridge_down", "message": "动作后端未接入"}, status_code=503)
+        try:
+            plan = await asyncio.wait_for(planner(cleaned, []), timeout=PLAN_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            return JSONResponse({"ok": False, "code": "bridge_down", "message": "动作后端超时"}, status_code=503)
+        except BackendUnavailable as exc:
+            return JSONResponse({"ok": False, "code": "bridge_down", "message": str(exc)}, status_code=503)
+        except PlanRejected as exc:
+            return JSONResponse({"ok": False, "code": "model_error", "message": str(exc)}, status_code=502)
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "code": "bridge_down", "message": str(exc)}, status_code=503)
+        if not isinstance(plan, dict):
+            return JSONResponse({"ok": False, "code": "bridge_down", "message": "动作后端没有计划"}, status_code=503)
+        return JSONResponse({"ok": True, "plan": plan})
+
     @app.websocket("/mas3d/ws")
     async def conversation(websocket: WebSocket) -> None:
         host = websocket.client.host if websocket.client else None
@@ -130,6 +175,7 @@ class TurnSession:
         self._runner = runner
         self._timeout_s = turn_timeout_s
         self._sent: deque[float] = deque()
+        self._history: deque[dict[str, str]] = deque(maxlen=MAX_HISTORY)
 
     def _prune(self, now: float) -> None:
         window = now - RATE_LIMIT_WINDOW_S
@@ -194,6 +240,29 @@ class TurnSession:
             return
         # 不带 cue：表情由前端 deriveCue 推导（design.md D6），桥接只回原文
         await websocket.send_json({"type": "reply", "turnId": turn_id, "text": str(reply)})
+        await self._maybe_intent(websocket, turn_id, cleaned, str(reply))
+
+    async def _maybe_intent(self, websocket: WebSocket, turn_id: str, text: str, reply: str) -> None:
+        """回复之后问一句动作后端；只有 command 计划才发 intent 帧，失败静默降级。"""
+        planner = getattr(self._runner, "handle_plan", None)
+        if planner is not None:
+            context = list(self._history)
+            plan: Any = None
+            try:
+                plan = await asyncio.wait_for(planner(text, context), timeout=PLAN_TIMEOUT_S)
+            except (asyncio.TimeoutError, BackendUnavailable, PlanRejected, RuntimeError, OSError):
+                plan = None
+            except Exception:  # noqa: BLE001 - 动作后端再怎么坏都不该打断对话
+                plan = None
+            if (
+                isinstance(plan, dict)
+                and plan.get("operation") == "command"
+                and isinstance(plan.get("intents"), list)
+                and plan["intents"]
+            ):
+                await websocket.send_json({"type": "intent", "turnId": turn_id, "plan": plan})
+        self._history.append({"role": "user", "content": text})
+        self._history.append({"role": "assistant", "content": reply})
 
 
 async def _send_error(websocket: WebSocket, code: str, message: str, turn_id: str | None = None) -> None:
@@ -280,7 +349,9 @@ class LocalServer:
 __all__ = [
     "LOCAL_HOSTS",
     "LocalServer",
+    "MAX_HISTORY",
     "MAX_INPUT_CHARS",
+    "PLAN_TIMEOUT_S",
     "RATE_LIMIT_TURNS",
     "RATE_LIMIT_WINDOW_S",
     "TurnSession",

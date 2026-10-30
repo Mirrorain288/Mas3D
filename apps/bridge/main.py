@@ -16,6 +16,7 @@ from typing import Any
 from astrbot.api.star import Context, Star, register
 
 from .adapter import QueueTurnBridge, TurnBridge, run_turn
+from .hastsec import HastSecClient
 from .session import DEFAULT_UMO, resolve_umo
 from .token import load_token, token_path
 from .web_api import LocalServer, create_app
@@ -76,6 +77,7 @@ class Mas3dGamePlugin(Star):
         self.bridge: TurnBridge | None = None
         self.token: str | None = None
         self.server: LocalServer | None = None
+        self.hast: HastSecClient | None = None
 
     async def initialize(self) -> None:
         self.bridge = self._build_bridge()
@@ -85,6 +87,7 @@ class Mas3dGamePlugin(Star):
                 "mas3d_game %s 拿不到 AstrBot 的事件队列，对话桥接暂不可用",
                 __version__,
             )
+        self.hast = HastSecClient(session_path=DATA_DIR / "mas3d" / "session.json")
         error = getattr(self.bridge, "last_error", None)
         if error:
             logger.warning("mas3d_game 桥接初始化有问题：%s", error)
@@ -137,6 +140,12 @@ class Mas3dGamePlugin(Star):
         if self.bridge is None:
             raise RuntimeError("桥接未初始化")
         return await run_turn(self.bridge, text)
+
+    async def handle_plan(self, text: str, context: Any = ()) -> dict[str, Any]:
+        """供动作端点 / WS 调用：问 HAST-SEC 要一份动作计划（不可用时由调用方降级）。"""
+        if self.hast is None:
+            raise RuntimeError("动作后端未初始化")
+        return await self.hast.plan(text, context or ())
 
 
 __all__ = [

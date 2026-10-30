@@ -64,13 +64,13 @@ Design decisions referenced as D1–D14 are in `design.md`; requirements in `spe
 
 ## 8. HAST-SEC 适配（D8）
 
-- [ ] 8.1 实现服务端代理 `POST /mas3d/api/motion/plan`：转发到 `http://127.0.0.1:8769/v13-api/plan`，显式设置 `Host` 与 `origin`（两者均为该 URL）、`content-type: application/json`，验证本地 echo 服务的 pytest 断言收到的两个头部与预期完全一致
-- [ ] 8.2 实现入参整形：`generation=v15`、`text` 截断到 300 字、`context` ≤4 条/总长 ≤1200/单条 ≤600、稳定会话 GUID（按游戏会话持久化），验证 pytest 覆盖超长文本截断与 GUID 复用
-- [ ] 8.3 实现返回值校验：按 `motion_result.mjs` 规则校验 `base`、`operation`、`timing`、`intents` 边界，非法计划丢弃并记录可诊断错误，验证用三组合法/两组非法 fixture 断言通过与否
-- [ ] 8.4 实现探活与冷却：会话开始与失败后 1.5 秒超时探测 `/v13-api/status`，失败则禁用 60 秒后重试，验证杀掉 8769 服务后不再发起请求、恢复服务 60 秒后自动重新可用
-- [ ] 8.5 实现 Tier 2 映射：`side`/`action`/`height` → 上臂/前臂/手旋转目标，遵守 `speed`、`strength`、`hold`、`delay` 与 `timing` 次序，验证单元测试对八种 action 各自产生不同且有界的旋转序列
-- [ ] 8.6 实现 `unsupported` 与空计划的降级：丢弃到 Tier 1 纯闲聊表现，验证传入 `后空翻` 类计划后角色无突变且无控制台异常
-- [ ] 8.7 在 `README.md` 记录启动 HAST-SEC 的命令（`node service/start.mjs`，端口 8769）与「意图级消费、不引入其运行时」的边界，验证文档命令在 `D:\HAST-SEC-v0.1.1\HAST-SEC-v0.1.1` 下可执行并返回 status
+- [x] 8.1 实现服务端代理 `POST /mas3d/api/motion/plan`：转发到 `http://127.0.0.1:8769/v13-api/plan`，显式设置 `Host` 与 `origin`（两者均为该 URL）、`content-type: application/json`，验证本地 echo 服务的 pytest 断言收到的两个头部与预期完全一致
+- [x] 8.2 实现入参整形：`generation=v15`、`text` 截断到 300 字、`context` ≤4 条/总长 ≤1200/单条 ≤600、稳定会话 GUID（按游戏会话持久化），验证 pytest 覆盖超长文本截断与 GUID 复用
+- [x] 8.3 实现返回值校验：按 `motion_result.mjs` 规则校验 `base`、`operation`、`timing`、`intents` 边界，非法计划丢弃并记录可诊断错误，验证用三组合法/两组非法 fixture 断言通过与否
+- [x] 8.4 实现探活与冷却：会话开始与失败后 1.5 秒超时探测 `/v13-api/status`，失败则禁用 60 秒后重试，验证杀掉 8769 服务后不再发起请求、恢复服务 60 秒后自动重新可用
+- [x] 8.5 实现 Tier 2 映射：`side`/`action`/`height` → 上臂/前臂/手旋转目标，遵守 `speed`、`strength`、`hold`、`delay` 与 `timing` 次序，验证单元测试对八种 action 各自产生不同且有界的旋转序列
+- [x] 8.6 实现 `unsupported` 与空计划的降级：丢弃到 Tier 1 纯闲聊表现，验证传入 `后空翻` 类计划后角色无突变且无控制台异常
+- [x] 8.7 在 `README.md` 记录启动 HAST-SEC 的命令（`node service/start.mjs`，端口 8769）与「意图级消费、不引入其运行时」的边界，验证文档命令在 `D:\HAST-SEC-v0.1.1\HAST-SEC-v0.1.1` 下可执行并返回 status
 
 ## 9. 语音与口型（D15–D19）
 

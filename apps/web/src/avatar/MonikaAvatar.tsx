@@ -4,10 +4,27 @@ import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { VRMLoaderPlugin, VRMUtils, type VRM, type VRMHumanBoneName } from "@pixiv/three-vrm";
 import type { Emotion, Gaze, Gesture, MotionPlan } from "@mas3d/protocol";
 import { Arbiter } from "@mas3d/motion";
+import { HastMotion } from "./hastMotion";
 import { FaceDriver, FALLBACK_FACE_MAP, resolveFaceMap, type MorphMesh } from "./faceDriver";
 import { BLINK_CLOSE_MS, mulberry32, nextBlink } from "./idle";
 import { gazeTarget } from "./gaze";
 import { applyPose, armHoldEndMs, type PoseBones } from "./applyPose";
+
+type Axis3 = { x: number; y: number; z: number };
+
+/** 双臂每帧先回到坐姿基准：applyPose 与 Tier2 都是叠加写入，不重置会累加漂移。 */
+function resetArm(node: THREE.Object3D | null, base: Axis3): void {
+  if (!node) return;
+  node.rotation.set(base.x, base.y, base.z);
+}
+
+/** Tier2 的手臂偏移叠加在基准之上（调用点在 applyPose 之后，故优先于 Tier1）。 */
+function offsetArm(node: THREE.Object3D | null, offset: Axis3): void {
+  if (!node) return;
+  node.rotation.x += offset.x;
+  node.rotation.y += offset.y;
+  node.rotation.z += offset.z;
+}
 
 export const VRM_URL = "/assets/monika/Monika.vrm";
 
@@ -208,6 +225,8 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
         const rightEye = loaded.humanoid.getNormalizedBoneNode("rightEye");
         const leftUpperArm = loaded.humanoid.getNormalizedBoneNode("leftUpperArm");
         const rightUpperArm = loaded.humanoid.getNormalizedBoneNode("rightUpperArm");
+        const leftLowerArm = loaded.humanoid.getNormalizedBoneNode("leftLowerArm");
+        const rightLowerArm = loaded.humanoid.getNormalizedBoneNode("rightLowerArm");
 
         // Tier1 手势仲裁：时间由渲染循环注入，可确定性测试
         const arbiter = new Arbiter();
@@ -219,8 +238,14 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
           upperArmL: leftUpperArm ?? idleBone,
           upperArmR: rightUpperArm ?? idleBone,
         };
-        // applyPose 是叠加式的，手臂每帧必须先回到坐姿基准，否则会累加漂移
-        const armBaseZ = { l: leftUpperArm?.rotation.z ?? 0, r: rightUpperArm?.rotation.z ?? 0 };
+        // applyPose / Tier2 都是叠加式的，双臂每帧必须先回到坐姿基准，否则会累加漂移
+        const armBase = {
+          upperL: { x: leftUpperArm?.rotation.x ?? 0, y: leftUpperArm?.rotation.y ?? 0, z: leftUpperArm?.rotation.z ?? 0 },
+          upperR: { x: rightUpperArm?.rotation.x ?? 0, y: rightUpperArm?.rotation.y ?? 0, z: rightUpperArm?.rotation.z ?? 0 },
+          lowerL: { x: leftLowerArm?.rotation.x ?? 0, y: leftLowerArm?.rotation.y ?? 0, z: leftLowerArm?.rotation.z ?? 0 },
+          lowerR: { x: rightLowerArm?.rotation.x ?? 0, y: rightLowerArm?.rotation.y ?? 0, z: rightLowerArm?.rotation.z ?? 0 },
+        };
+        const hastMotion = new HastMotion();
         let armsOwnedUntilMs = 0;
         const base = {
           chestX: chest?.rotation.x ?? 0,
@@ -262,14 +287,24 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
           if (leftEye) leftEye.rotation.set(eyePitch, eyeYaw, 0);
           if (rightEye) rightEye.rotation.set(eyePitch, eyeYaw, 0);
 
-          if (leftUpperArm) leftUpperArm.rotation.z = armBaseZ.l;
-          if (rightUpperArm) rightUpperArm.rotation.z = armBaseZ.r;
+          resetArm(leftUpperArm, armBase.upperL);
+          resetArm(rightUpperArm, armBase.upperR);
+          resetArm(leftLowerArm, armBase.lowerL);
+          resetArm(rightLowerArm, armBase.lowerR);
           if (armsOwnedUntilMs > 0 && nowMs >= armsOwnedUntilMs) {
             armsOwnedUntilMs = 0;
             arbiter.setArmOwnedByTier2(false, nowMs);
           }
           const gestureSample = arbiter.sample(nowMs);
           if (gestureSample.gesture !== "none") applyPose(bones, gestureSample.delta, 1);
+          // Tier2（HAST-SEC 计划）覆盖 Tier1：手臂已被它占用时 arbiter 不会再给手臂手势
+          const armPose = hastMotion.sample(nowMs);
+          if (armPose) {
+            offsetArm(leftUpperArm, armPose.left.upperArm);
+            offsetArm(rightUpperArm, armPose.right.upperArm);
+            offsetArm(leftLowerArm, armPose.left.forearm);
+            offsetArm(rightLowerArm, armPose.right.forearm);
+          }
 
           if (nowMs >= blinkAt) {
             blinkStart = nowMs;
@@ -296,9 +331,10 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
             return arbiter.request(gesture, intensity, performance.now());
           },
           holdArmsFor(plan: MotionPlan): void {
-            const holdMs = armHoldEndMs(plan.intents, plan.timing);
-            if (holdMs <= 0) return;
+            // unsupported / chat / 空计划不启动：直接退回 Tier 1，手臂不被占用
             const now = performance.now();
+            if (!hastMotion.start(plan, now)) return;
+            const holdMs = armHoldEndMs(plan.intents, plan.timing);
             armsOwnedUntilMs = Math.max(armsOwnedUntilMs, now + holdMs);
             arbiter.setArmOwnedByTier2(true, now);
           },
@@ -317,6 +353,7 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
             driver,
             api,
             arbiter,
+            hastMotion,
             stats: () => ({ ...stats, blinkWeight, blinkAt, now: performance.now() }),
             pose(): Record<string, unknown> {
               const out: Record<string, unknown> = {};
