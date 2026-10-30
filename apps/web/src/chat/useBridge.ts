@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { deriveCue } from "@mas3d/motion";
 import { parseServerFrame, type ExpressionCue, type MotionPlan } from "@mas3d/protocol";
 import { clearTurns, emptyState, loadTurns, normalizeInput, reduce, saveTurns, type ChatError, type Phase, type Turn } from "./store";
 
@@ -150,7 +151,8 @@ export function useBridge(url: string, token: string | null | undefined, handler
         case "reply":
           clearReplyTimer();
           dispatch({ type: "reply", id: frame.turnId, text: frame.text, at: Date.now() });
-          handlersRef.current.onCue?.(frame.cue);
+          // 桥接侧可以不带 cue：缺省时用前端同一份词表推导，保持单一推导源
+          handlersRef.current.onCue?.(frame.cue ?? deriveCue(frame.text));
           break;
         case "intent": {
           const plan = frame.plan;

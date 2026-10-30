@@ -7,6 +7,16 @@ describe('parseServerFrame', () => {
     expect(f.type).toBe('reply');
   });
 
+  it('accepts a reply frame without a cue', () => {
+    const f = parseServerFrame({ type: 'reply', turnId: 't2', text: '我在' });
+    expect(f.type).toBe('reply');
+    if (f.type === 'reply') expect(f.cue).toBeUndefined();
+  });
+
+  it('still rejects a malformed cue', () => {
+    expect(() => parseServerFrame({ type: 'reply', turnId: 't3', text: '好', cue: { emotion: 'joy' } })).toThrow(ProtocolError);
+  });
+
   it('rejects an unknown frame type', () => {
     expect(() => parseServerFrame({ type: 'nope' })).toThrow(ProtocolError);
   });

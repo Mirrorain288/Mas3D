@@ -23,7 +23,7 @@ export type ErrorCode = 'bridge_down' | 'timeout' | 'model_error' | 'bad_request
 export type ServerFrame =
   | { type: 'ack'; turnId: string }
   | { type: 'thinking'; turnId: string }
-  | { type: 'reply'; turnId: string; text: string; cue: ExpressionCue; voice?: VoiceRef }
+  | { type: 'reply'; turnId: string; text: string; cue?: ExpressionCue; voice?: VoiceRef }
   | { type: 'intent'; turnId: string; plan: MotionPlan }
   | { type: 'error'; turnId?: string; code: ErrorCode; message: string };
 
@@ -103,8 +103,10 @@ export function parseServerFrame(raw: unknown): ServerFrame {
         type: 'reply',
         turnId: str(raw, 'turnId', 'reply'),
         text: str(raw, 'text', 'reply'),
-        cue: cue(raw['cue']),
       };
+      // cue 可以缺省：表情推导在前端 deriveCue 里做（design.md D6），
+      // 桥接侧只负责把模型回复原样送回来，避免在 Python 里复制一份情绪词表。
+      if (raw['cue'] !== undefined) frame.cue = cue(raw['cue']);
       if (raw['voice'] !== undefined) frame.voice = voice(raw['voice']);
       return frame;
     }
