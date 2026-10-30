@@ -28,6 +28,8 @@ export function clampOrbit(yaw: number, pitch: number, distance: number): Orbit 
 
 export interface CameraRig {
   readonly orbit: Orbit;
+  /** 设置里的「相机灵敏度」：1 = 默认手感，范围 0.4–2。 */
+  setSensitivity(mult: number): void;
   /** 每帧调用：把 orbit 写进相机位置与朝向 */
   update(): void;
   setTarget(target: THREE.Vector3): void;
@@ -46,6 +48,7 @@ export function createCameraRig(
   target: THREE.Vector3 = DEFAULT_TARGET.clone(),
 ): CameraRig {
   let orbit: Orbit = { yaw: 0, pitch: 6, distance: 2.95 };
+  let sensitivity = 1;
   let pointerId: number | null = null;
   let lastX = 0;
   let lastY = 0;
@@ -65,7 +68,7 @@ export function createCameraRig(
     const dy = event.clientY - lastY;
     lastX = event.clientX;
     lastY = event.clientY;
-    orbit = clampOrbit(orbit.yaw - dx * 0.18, orbit.pitch + dy * 0.12, orbit.distance);
+    orbit = clampOrbit(orbit.yaw - dx * 0.18 * sensitivity, orbit.pitch + dy * 0.12 * sensitivity, orbit.distance);
     rig.update();
   };
 
@@ -78,7 +81,7 @@ export function createCameraRig(
 
   const onWheel = (event: WheelEvent): void => {
     event.preventDefault();
-    orbit = clampOrbit(orbit.yaw, orbit.pitch, orbit.distance + event.deltaY * 0.0012);
+    orbit = clampOrbit(orbit.yaw, orbit.pitch, orbit.distance + event.deltaY * 0.0012 * sensitivity);
     rig.update();
   };
 
@@ -96,6 +99,9 @@ export function createCameraRig(
         target.z + horizontal * Math.cos(yaw),
       );
       camera.lookAt(target);
+    },
+    setSensitivity(mult: number): void {
+      sensitivity = Math.min(2, Math.max(0.4, mult));
     },
     setTarget(next: THREE.Vector3): void {
       target.copy(next);

@@ -31,6 +31,8 @@ export interface AvatarApi {
   playGesture(gesture: Gesture, intensity: number): boolean;
   /** Tier2（HAST-SEC）动作用到了手臂：按计划的 delay+hold 占住手臂，期间挡下 Tier1 的手部动作。 */
   holdArmsFor(plan: MotionPlan): void;
+  /** 设置里的「视线灵敏度」：缩放头/颈/眼的跟随幅度，1 = 默认。 */
+  setGazeSensitivity(mult: number): void;
 }
 
 export interface MonikaAvatarProps {
@@ -235,6 +237,7 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
         let blinkWeight = 0;
         const stats = { blinks: 0, lastBlinkAt: 0 };
         let gazeMode: Gaze = "player";
+        let gazeSensitivity = 1;
 
         const headWorld = new THREE.Vector3();
 
@@ -249,11 +252,15 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
           if (head) {
             head.getWorldPosition(headWorld);
             gaze = gazeTarget(host.camera.position, headWorld, gazeMode);
-            head.rotation.set(base.headX + gaze.pitch * HEAD_FOLLOW + breath * 0.3, base.headY + gaze.yaw * HEAD_FOLLOW + sway, 0);
+            const followPitch = gaze.pitch * HEAD_FOLLOW * gazeSensitivity;
+            const followYaw = gaze.yaw * HEAD_FOLLOW * gazeSensitivity;
+            head.rotation.set(base.headX + followPitch + breath * 0.3, base.headY + followYaw + sway, 0);
           }
-          if (neck) neck.rotation.x = base.neckX + gaze.pitch * NECK_FOLLOW;
-          if (leftEye) leftEye.rotation.set(gaze.pitch * EYE_FOLLOW, gaze.yaw * EYE_FOLLOW, 0);
-          if (rightEye) rightEye.rotation.set(gaze.pitch * EYE_FOLLOW, gaze.yaw * EYE_FOLLOW, 0);
+          if (neck) neck.rotation.x = base.neckX + gaze.pitch * NECK_FOLLOW * gazeSensitivity;
+          const eyePitch = gaze.pitch * EYE_FOLLOW * gazeSensitivity;
+          const eyeYaw = gaze.yaw * EYE_FOLLOW * gazeSensitivity;
+          if (leftEye) leftEye.rotation.set(eyePitch, eyeYaw, 0);
+          if (rightEye) rightEye.rotation.set(eyePitch, eyeYaw, 0);
 
           if (leftUpperArm) leftUpperArm.rotation.z = armBaseZ.l;
           if (rightUpperArm) rightUpperArm.rotation.z = armBaseZ.r;
@@ -294,6 +301,9 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
             const now = performance.now();
             armsOwnedUntilMs = Math.max(armsOwnedUntilMs, now + holdMs);
             arbiter.setArmOwnedByTier2(true, now);
+          },
+          setGazeSensitivity(mult: number): void {
+            gazeSensitivity = Math.min(1.5, Math.max(0.5, mult));
           },
         };
         apiRef.current = api;

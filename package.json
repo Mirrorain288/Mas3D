@@ -8,9 +8,11 @@
   "scripts": {
     "test": "pnpm -r test",
     "assets": "node tools/sync-assets.mjs",
-    "assets:check": "node tools/sync-assets.mjs --check"
+    "assets:check": "node tools/sync-assets.mjs --check",
+    "mock:bridge": "node tools/mock-bridge.mjs"
   },
   "devDependencies": {
-    "sharp": "^0.35.5"
+    "sharp": "^0.35.5",
+    "ws": "^8.22.0"
   }
 }

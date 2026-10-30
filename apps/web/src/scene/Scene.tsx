@@ -14,6 +14,10 @@ export interface SceneApi {
   playGesture(gesture: Gesture, intensity: number): boolean;
   /** 把 Tier2 动作计划的持续时长告诉角色，期间挡下 Tier1 的手部动作。 */
   holdArmsFor(plan: MotionPlan): void;
+  /** 设置面板的相机灵敏度（0.4–2），立即生效。 */
+  setCameraSensitivity(mult: number): void;
+  /** 设置面板的视线灵敏度（0.5–1.5），立即生效。 */
+  setGazeSensitivity(mult: number): void;
 }
 
 interface SceneProps {
@@ -145,6 +149,12 @@ export function Scene({ onReady }: SceneProps) {
       },
       holdArmsFor(plan: MotionPlan): void {
         avatarRef.current?.holdArmsFor(plan);
+      },
+      setCameraSensitivity(mult: number): void {
+        rig?.setSensitivity(mult);
+      },
+      setGazeSensitivity(mult: number): void {
+        avatarRef.current?.setGazeSensitivity(mult);
       },
     };
 
