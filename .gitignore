@@ -57,7 +57,11 @@ obj/
 
 # ---------- 工具产物 ----------
 .superpowers/
-/apps/web/public/assets/
+# 派生资产不入库，只保留已获再分发许可的 VRM（D10）
+/apps/web/public/assets/*
+!/apps/web/public/assets/monika/
+/apps/web/public/assets/monika/*
+!/apps/web/public/assets/monika/Monika.vrm
 
 # ---------- 素材（大体积本地资产，不入库）----------
 /素材/

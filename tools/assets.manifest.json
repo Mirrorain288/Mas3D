@@ -1,0 +1,134 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "source": "素材/NightSkyHDRI008_8K/NightSkyHDRI008_8K_TONEMAPPED.jpg",
+      "target": "apps/web/public/assets/hdri/night-sky-2k.jpg",
+      "kind": "hdri",
+      "transform": "resize:2048",
+      "bytes": 294950,
+      "sha256": "3dfe846ccbc292e3f457fa4d91b6ba370282df061695cef739d85411696088bc"
+    },
+    {
+      "source": "素材/NightSkyHDRI008_8K/NightSkyHDRI008_8K_TONEMAPPED.jpg",
+      "target": "apps/web/public/assets/hdri/night-sky-1k.jpg",
+      "kind": "hdri",
+      "transform": "resize:1024",
+      "bytes": 61833,
+      "sha256": "60ccf887e22d08bb286e50f73a78ce46927051485a6689b318a942fcb4e286a2"
+    },
+    {
+      "source": "素材/Clay002_4K-JPG/Clay002_4K-JPG_Color.jpg",
+      "target": "apps/web/public/assets/pbr/clay-color@1k.webp",
+      "kind": "pbr",
+      "transform": "webp:1024",
+      "bytes": 4068,
+      "sha256": "078824801e2e48e9f2bba228e16b29d0d4b73d7612fc60579d586317eb7ef40a"
+    },
+    {
+      "source": "素材/WoodFloor070_4K-JPG/WoodFloor070_4K-JPG_Color.jpg",
+      "target": "apps/web/public/assets/pbr/wood-floor-color@1k.webp",
+      "kind": "pbr",
+      "transform": "webp:1024",
+      "bytes": 74612,
+      "sha256": "9248193652b5c68104d52a056566867c948cbc40bb2b4bada139b09d8f30b3ea"
+    },
+    {
+      "source": "素材/OfficeCeiling001_2K-JPG/OfficeCeiling001_2K-JPG_Color.jpg",
+      "target": "apps/web/public/assets/pbr/ceiling-color@1k.webp",
+      "kind": "pbr",
+      "transform": "webp:1024",
+      "bytes": 6644,
+      "sha256": "0920401792344bf7e3c08e39531a39c5ed6c515b02aa933b2833807c58bf2ee8"
+    },
+    {
+      "source": "素材/Clay002_4K-JPG/Clay002_4K-JPG_NormalGL.jpg",
+      "target": "apps/web/public/assets/pbr/clay-normal@1k.webp",
+      "kind": "pbr",
+      "transform": "webp:1024",
+      "bytes": 244168,
+      "sha256": "931a00fef8659aaa1c4d8ac79810b805531a01a3725f8cbcce8a2c24522687e3"
+    },
+    {
+      "source": "素材/WoodFloor070_4K-JPG/WoodFloor070_4K-JPG_NormalGL.jpg",
+      "target": "apps/web/public/assets/pbr/wood-floor-normal@1k.webp",
+      "kind": "pbr",
+      "transform": "webp:1024",
+      "bytes": 2026,
+      "sha256": "1795c4143c100ab2c6d8e468f8ff577931efafa153980e0f1111b25b6534a267"
+    },
+    {
+      "source": "素材/OfficeCeiling001_2K-JPG/OfficeCeiling001_2K-JPG_NormalGL.jpg",
+      "target": "apps/web/public/assets/pbr/ceiling-normal@1k.webp",
+      "kind": "pbr",
+      "transform": "webp:1024",
+      "bytes": 211344,
+      "sha256": "bfacf7bea1f65b97e2cdc411454fa79da9521f7c1ad35176c64471575534cffa"
+    },
+    {
+      "source": "素材/Clay002_4K-JPG/Clay002_4K-JPG_Roughness.jpg",
+      "target": "apps/web/public/assets/pbr/clay-roughness@1k.webp",
+      "kind": "pbr",
+      "transform": "webp:1024",
+      "bytes": 258118,
+      "sha256": "bd0690a525bd72d9fffce6a353a5ffd240c8da662b7c052717f95209a654f1c8"
+    },
+    {
+      "source": "素材/WoodFloor070_4K-JPG/WoodFloor070_4K-JPG_Roughness.jpg",
+      "target": "apps/web/public/assets/pbr/wood-floor-roughness@1k.webp",
+      "kind": "pbr",
+      "transform": "webp:1024",
+      "bytes": 44642,
+      "sha256": "a5484b1a336a4ffafeb4d6524faedb61f5267d34475809b770aa6f0a7f580d46"
+    },
+    {
+      "source": "素材/OfficeCeiling001_2K-JPG/OfficeCeiling001_2K-JPG_Roughness.jpg",
+      "target": "apps/web/public/assets/pbr/ceiling-roughness@1k.webp",
+      "kind": "pbr",
+      "transform": "webp:1024",
+      "bytes": 25140,
+      "sha256": "440d3057d388338ca20d46f22a12733e44815d31b38b9b1177f53588960b4ef1"
+    },
+    {
+      "source": "素材/StylooClassroomAssetPack GLTF & FBX/StylooClassroomAssetPack GLTF & FBX/classroom/GLTF/desk.glb",
+      "target": "apps/web/public/assets/classroom/desk.glb",
+      "kind": "glb",
+      "transform": "copy",
+      "bytes": 57416,
+      "sha256": "52e9a85ba9b7f4ca02021bb6e28d575d70ce05f1d24231fc5aefccd7f0e8aa85"
+    },
+    {
+      "source": "素材/StylooClassroomAssetPack GLTF & FBX/StylooClassroomAssetPack GLTF & FBX/classroom/GLTF/chair.glb",
+      "target": "apps/web/public/assets/classroom/chair.glb",
+      "kind": "glb",
+      "transform": "copy",
+      "bytes": 49544,
+      "sha256": "ba4aa2f942a8e06ff63be42111e25e2f2b3e4d09390168ca8ba50fc4a0553693"
+    },
+    {
+      "source": "素材/StylooClassroomAssetPack GLTF & FBX/StylooClassroomAssetPack GLTF & FBX/classroom/GLTF/blackboardbig.glb",
+      "target": "apps/web/public/assets/classroom/blackboard.glb",
+      "kind": "glb",
+      "transform": "copy",
+      "bytes": 15552,
+      "sha256": "bd4b4a494efbc51b0e622fc26af3363e6dfa6df96c875b8f074bde67527e7692"
+    },
+    {
+      "source": "素材/StylooClassroomAssetPack GLTF & FBX/StylooClassroomAssetPack GLTF & FBX/classroom/GLTF/lamp.glb",
+      "target": "apps/web/public/assets/classroom/light.glb",
+      "kind": "glb",
+      "transform": "copy",
+      "bytes": 84068,
+      "sha256": "f674149dd22f5fcc5994eb80565b785ba8893f55d9415f8bb2d1619d562a343d"
+    },
+    {
+      "source": "素材/莫妮卡.vrm",
+      "target": "apps/web/public/assets/monika/Monika.vrm",
+      "kind": "vrm",
+      "transform": "copy",
+      "tracked": true,
+      "bytes": 23081108,
+      "sha256": "b2590899e0eb002cc7670f5d7d101e5a1f3f8de8f4133464c0a1d718846963f9"
+    }
+  ]
+}
