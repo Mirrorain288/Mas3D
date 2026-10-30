@@ -88,11 +88,11 @@ Design decisions referenced as D1–D14 are in `design.md`; requirements in `spe
 
 ## 10. 集成与验收
 
-- [ ] 10.1 编写 `tools/mock-bridge.mjs`：可剧本化的 WS 服务（正常回复/超时/错误/动作计划），验证 Playwright 冒烟用例全部基于该 mock 通过
-- [ ] 10.2 Playwright 冒烟：场景挂载 → 发送一句 → 收到回复 → 表情变化 → 断开连接出现横幅，验证 `pnpm --filter @mas3d/web e2e` 退出码 0
-- [ ] 10.3 真实链路联调：在 AstrBot 在线、QQ 会话为 `Monika:FriendMessage:2441388327` 的情况下完成一回合，验证 3D 教室回复与 QQ 会话中同一回合的文本完全一致（逐字比对）
-- [ ] 10.4 语音链路联调：一句带情绪的中文回复完整走过 翻译 → 合成 → 播放 → 口型 → 结束恢复，验证字幕为中文、音频为英文、口型随能量变化且在句间归零
-- [ ] 10.5 验收清单记录：把「VRM 表情/视线、语音与口型、HAST-SEC 在线与离线两种手臂表现、QQ 副作用、断线恢复」逐项结果写入 `openspec/changes/add-monika-space-classroom/verification.md`，验证清单每项都有观察到的事实而非断言
+- [x] 10.1 编写 `tools/mock-bridge.mjs`：可剧本化的 WS 服务（正常回复/超时/错误/动作计划），验证 Playwright 冒烟用例全部基于该 mock 通过
+- [x] 10.2 Playwright 冒烟：场景挂载 → 发送一句 → 收到回复 → 表情变化 → 断开连接出现横幅，验证 `pnpm --filter @mas3d/web e2e` 退出码 0
+- [x] 10.3 真实链路联调：在 AstrBot 在线、QQ 会话为 `Monika:FriendMessage:2441388327` 的情况下完成一回合，验证 3D 教室回复与 QQ 会话中同一回合的文本完全一致（逐字比对）
+- [x] 10.4 语音链路联调：一句带情绪的中文回复完整走过 翻译 → 合成 → 播放 → 口型 → 结束恢复，验证字幕为中文、音频为英文、口型随能量变化且在句间归零
+- [x] 10.5 验收清单记录：把「VRM 表情/视线、语音与口型、HAST-SEC 在线与离线两种手臂表现、QQ 副作用、断线恢复」逐项结果写入 `openspec/changes/add-monika-space-classroom/verification.md`，验证清单每项都有观察到的事实而非断言
 
 ## Workflow follow-up
 

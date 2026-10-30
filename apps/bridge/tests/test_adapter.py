@@ -170,3 +170,95 @@ async def test_queue_bridge_raises_when_never_picked_up(adapter):
 
     with pytest.raises(adapter.TurnDispatchError):
         await bridge.dispatch(event)
+
+
+@pytest.fixture
+def multi_bridge(adapter):
+    """dispatch 里只投最后一段，但把整轮文本记到 extra —— 模拟 splitter 改写 result。"""
+
+    FULL = "（3D教室）第一段。\n\n第二段。\n\n最后一段。"
+
+    class _MultiBridge(adapter.TurnBridge):
+        def __init__(self) -> None:
+            super().__init__()
+            self.full = FULL
+
+        async def dispatch(self, event) -> None:
+            adapter.set_full_reply(event, self.full)
+            await event.send(_Chain("最后一段。"))
+
+    return _MultiBridge()
+
+
+@pytest.mark.asyncio
+async def test_run_turn_prefers_full_reply_extra(adapter, multi_bridge):
+    text = await adapter.run_turn(multi_bridge, "你好", timeout_s=5.0)
+
+    # 整轮文本优先于逐块拼接：三段都在，场景前缀已剥离
+    assert text == "第一段。\n\n第二段。\n\n最后一段。"
+    assert "（3D教室）" not in text
+
+
+@pytest.mark.asyncio
+async def test_run_turn_falls_back_to_chunks(adapter, bridge_factory):
+    bridge = bridge_factory("（3D教室）只有一块。")
+
+    text = await adapter.run_turn(bridge, "你好", timeout_s=5.0)
+
+    assert text == "只有一块。"
+
+
+@pytest.mark.asyncio
+async def test_game_event_is_recognised(adapter, session_mod):
+    event = adapter.GameMessageEvent("你好", umo=session_mod.DEFAULT_UMO)
+
+    assert adapter.is_game_event(event) is True
+    assert adapter.is_game_event(_Chain("x")) is False
+
+
+def test_suppress_external_splitter_marks_result(adapter):
+    result = _Chain("整段文本")
+
+    adapter.suppress_external_splitter(result)
+
+    # astrbot_plugin_splitter 的 main.py:213 正是看这个标记
+    assert getattr(result, adapter.SPLITTER_MARK_ATTR, False) is True
+
+
+def test_capture_result_text_handles_plain_text(adapter):
+    assert adapter.capture_result_text(_Chain("整段文本")) == "整段文本"
+    assert adapter.capture_result_text(object()) == ""
+
+
+class _Type:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+
+def test_skip_platform_tts_downgrades_llm_result(adapter, monkeypatch):
+    class _Result:
+        def __init__(self) -> None:
+            self.result_content_type = _Type("LLM_RESULT")
+
+    class _Enum:
+        GENERAL_RESULT = _Type("GENERAL_RESULT")
+
+    monkeypatch.setattr(adapter, "_result_content_type_enum", lambda: _Enum)
+    result = _Result()
+
+    adapter.skip_platform_tts(result)
+
+    assert result.result_content_type.name == "GENERAL_RESULT"
+
+
+def test_skip_platform_tts_keeps_other_results(adapter, monkeypatch):
+    class _Result:
+        def __init__(self) -> None:
+            self.result_content_type = _Type("GENERAL_RESULT")
+
+    monkeypatch.setattr(adapter, "_result_content_type_enum", lambda: None)
+    result = _Result()
+
+    adapter.skip_platform_tts(result)
+
+    assert result.result_content_type.name == "GENERAL_RESULT"

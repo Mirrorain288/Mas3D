@@ -72,6 +72,12 @@ def _install_astrbot_stub() -> None:
 
             return decorator
 
+        def on_decorating_result(self, *args, **kwargs):
+            def decorator(fn):
+                return fn
+
+            return decorator
+
     event.AstrMessageEvent = AstrMessageEvent
     event.filter = _Filter()
 

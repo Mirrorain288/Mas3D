@@ -10,7 +10,8 @@ import { useVoice } from "./voice";
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
 const ENV = import.meta.env as unknown as Record<string, string | undefined>;
-const BRIDGE_URL = ENV.VITE_MAS3D_WS ?? "ws://localhost:8787/mas3d/ws";
+// 默认指向 AstrBot 里的本机桥接（8790）；脚本化测试用 VITE_MAS3D_WS 改成 mock。
+const BRIDGE_URL = ENV.VITE_MAS3D_WS ?? "ws://127.0.0.1:8790/mas3d/ws";
 const ENV_TOKEN = ENV.VITE_MAS3D_TOKEN ?? null;
 
 function queryToken(): string | null {
@@ -30,7 +31,7 @@ function httpBase(wsUrl: string): string {
     url.protocol = url.protocol === "wss:" ? "https:" : "http:";
     return url.origin;
   } catch {
-    return "http://localhost:8787";
+    return "http://127.0.0.1:8790";
   }
 }
 

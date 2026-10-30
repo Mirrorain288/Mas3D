@@ -51,6 +51,98 @@ GAME_PLATFORM = PlatformMetadata(
 
 SendCallback = Callable[[str], Awaitable[None]]
 
+FULL_REPLY_EXTRA = "mas3d_full_reply"
+"""整轮回复的完整文本存在事件的 extra 里。"""
+
+SPLITTER_MARK_ATTR = "__splitter_processed"
+"""astrbot_plugin_splitter 用来跳过已处理 result 的私有标记。"""
+
+
+def extra_text(event: Any, key: str) -> str:
+    """读事件 extra 里的文本；没有或不是字符串就返回空串。"""
+    try:
+        value = event.get_extra(key, "")
+    except Exception:  # noqa: BLE001 - 老版本事件或替身对象可能没有 extra
+        return ""
+    return value.strip() if isinstance(value, str) else ""
+
+
+def set_full_reply(event: Any, text: str) -> None:
+    """把整轮回复记到事件上，供 run_turn 直接取用。"""
+    if not isinstance(text, str) or not text.strip():
+        return
+    try:
+        event.set_extra(FULL_REPLY_EXTRA, text)
+    except Exception:  # noqa: BLE001 - 记不下来就退回按块拼接
+        pass
+
+
+def is_game_event(event: Any) -> bool:
+    """事件是不是本插件自己造的游戏事件（按平台 id 判定）。"""
+    getter = getattr(event, "get_platform_id", None)
+    if not callable(getter):
+        return False
+    try:
+        return getter() == GAME_PLATFORM.id
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def capture_result_text(result: Any) -> str:
+    """从 MessageEventResult 里取纯文本；取不到返回空串。"""
+    getter = getattr(result, "get_plain_text", None)
+    if not callable(getter):
+        return ""
+    try:
+        text = getter()
+    except Exception:  # noqa: BLE001
+        return ""
+    return text if isinstance(text, str) else ""
+
+
+def _result_content_type_enum() -> Any:
+    """延迟取 AstrBot 的 ResultContentType；单测里可以替换掉。"""
+    try:
+        from astrbot.core.message.message_event_result import ResultContentType
+    except Exception:  # noqa: BLE001 - 老版本或测试桩没有这个模块
+        return None
+    return ResultContentType
+
+
+def skip_platform_tts(result: Any) -> None:
+    """让 AstrBot 自带的 TTS 不处理这条回复。
+
+    游戏回合和 QQ 共用 umo，result_decorate 会按 umo 查会话开关，逐段跑
+    GSV 合成（每段 5s 上下，而且中文翻译常带 emoji 直接 400）。游戏里的语音
+    由本插件自己的 /mas3d/api/voice/synth 负责（apps/bridge/tts.py），所以把
+    这条 result 的内容类型降成普通结果，TTS 与自动分段都会跳过它。
+    """
+    current = getattr(result, "result_content_type", None)
+    if getattr(current, "name", "") != "LLM_RESULT":
+        return
+    enum = _result_content_type_enum()
+    target = getattr(enum, "GENERAL_RESULT", None) if enum is not None else None
+    if target is None:
+        return
+    try:
+        result.result_content_type = target
+    except (AttributeError, TypeError):
+        pass
+
+
+def suppress_external_splitter(result: Any) -> None:
+    """让 astrbot_plugin_splitter 放过这一条 result。
+
+    该插件在 on_decorating_result（priority=-1e17，晚于本插件）里检查
+    getattr(result, "__splitter_processed", False)（插件源码 main.py:213），
+    命中就直接 return。于是它不会把回复拆成多段、也不会绕开事件直接往
+    QQ 会话发。插件没装时多设一个属性无副作用。
+    """
+    try:
+        setattr(result, SPLITTER_MARK_ATTR, True)
+    except (AttributeError, TypeError):
+        pass
+
 
 class TurnDispatchError(RuntimeError):
     """事件没有被 AstrBot 管线接管（EventBus 未运行或配置找不到）。"""
@@ -228,4 +320,7 @@ async def run_turn(
     event = bridge.create_event(scene_text(prompt), collect)
     bridge.last_event = event
     await asyncio.wait_for(bridge.dispatch(event), timeout=timeout_s)
+    full = extra_text(event, FULL_REPLY_EXTRA)
+    if full:
+        return strip_scene_prefix(full.strip())
     return strip_scene_prefix("\n".join(chunks))

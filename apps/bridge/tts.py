@@ -70,6 +70,25 @@ class TtsUnavailable(RuntimeError):
     """合成服务不可用（没启动、超时、返回非 200）。"""
 
 
+TTS_ENCODING = "gbk"
+"""本地 api_v2 跑在 Windows 上，非 GBK 字符会让它直接 400 掉整句。"""
+
+
+def sanitize_for_tts(text: str) -> str:
+    """剔除合成链路吃不下的字符（emoji、生僻符号），并把空白压成单空格。"""
+    kept: list[str] = []
+    for ch in text:
+        if ch in "\r\n\t":
+            kept.append(" ")
+            continue
+        try:
+            ch.encode(TTS_ENCODING)
+        except UnicodeEncodeError:
+            continue
+        kept.append(ch)
+    return " ".join("".join(kept).split())
+
+
 def split_sentences(text: str) -> list[str]:
     """按中英文句末标点切句并保留标点；纯标点/空片段丢弃。"""
     sentences: list[str] = []
@@ -310,9 +329,9 @@ class TtsClient:
 
     # --- 合成 -----------------------------------------------------------------
     async def synthesize(self, text: str, sentence: int | None = None) -> dict:
-        cleaned = (text or "").strip()
+        cleaned = sanitize_for_tts(text or "")
         if not cleaned:
-            raise ValueError("语音文本为空")
+            raise TtsUnavailable("台词里没有可合成的字符")
         cleaned = cleaned[:MAX_TEXT_CHARS]
 
         english = self._read_translation(cleaned)
@@ -321,7 +340,7 @@ class TtsClient:
                 translated = await self._translator(cleaned)
             else:
                 translated = await translate_zh_to_en(cleaned, config_path=self.translate_config_path)
-            english = (translated or cleaned).strip()
+            english = sanitize_for_tts(translated or cleaned)
             # 只缓存真的翻译过的结果：翻译失败会原样返回中文，缓存住就再也翻不回来了。
             if english and english != cleaned:
                 self._write_translation(cleaned, english)

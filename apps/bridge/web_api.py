@@ -28,6 +28,7 @@ from typing import Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from .adapter import TurnDispatchError
@@ -53,6 +54,8 @@ VOICE_TIMEOUT_S = 70.0
 """POST /mas3d/api/voice/synth 的整体预算；客户端自己还有单句 30s / 整轮 60s 两层超时。"""
 
 LOCAL_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
+CORS_ORIGIN_RE = r"^http://(localhost|127\.0\.0\.1)(:\d{1,5})?$"
+"""放行的浏览器来源：只认本机页面，避免任意网页驱动 QQ bot。"""
 """允许的来源主机。testclient 只会出现在进程内 ASGI 测试传输里，不可能来自真实 socket。"""
 
 UNAUTHORIZED = "令牌不正确（%s/mas3d/api/health 需要 Authorization: Bearer <token>）"
@@ -87,6 +90,15 @@ def create_app(
 ) -> FastAPI:
     """造出桥接服务。runner 需要提供 umo / degraded / async handle_turn(text)。"""
     app = FastAPI(title="Mas3D bridge", docs_url=None, redoc_url=None, openapi_url=None)
+    # 页面从 Vite 开发服务器（localhost:5173）或静态目录打开，和 8790 不同源；
+    # 只放行本机来源，令牌仍走 Authorization 头。
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=CORS_ORIGIN_RE,
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["authorization", "content-type"],
+    )
 
     async def require_token(request: Request) -> None:
         supplied = bearer_token(request.headers) or request.query_params.get("token", "")

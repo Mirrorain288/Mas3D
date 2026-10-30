@@ -328,3 +328,25 @@ def test_translate_skips_english_and_disabled(translate_module, tmp_path):
     disabled.write_text(json.dumps({"enable": False, "api_key": "sk-test"}), encoding="utf-8")
     assert asyncio.run(translate_module.translate_zh_to_en("你好", config_path=disabled, post=fake_post)) == "你好"
     assert called == []
+
+
+def test_sanitize_strips_emoji_and_collapses_whitespace(tts_module):
+    assert tts_module.sanitize_for_tts("好呀🐷💤！\n\n 走\n") == "好呀！ 走"
+    assert tts_module.sanitize_for_tts("🐷🐷") == ""
+    assert tts_module.sanitize_for_tts("hello  world") == "hello world"
+
+
+async def _emoji_translator(text: str) -> str:
+    return "Okay 🐷 let us go!"
+
+
+def test_synthesize_drops_characters_the_api_cannot_take(tmp_path, plugin):
+    transport = FakeTransport()
+    client = _client(tmp_path, plugin, transport, translator=_emoji_translator)
+
+    voice = asyncio.run(client.synthesize("好呀🐷，我们走！"))
+
+    assert voice["durationMs"] > 0
+    sent = transport.tts_calls()[0]["text"]
+    assert "🐷" not in sent
+    assert sent == "Okay let us go!"

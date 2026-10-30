@@ -13,9 +13,19 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from astrbot.api.event import filter
 from astrbot.api.star import Context, Star, register
 
-from .adapter import QueueTurnBridge, TurnBridge, run_turn
+from .adapter import (
+    QueueTurnBridge,
+    TurnBridge,
+    capture_result_text,
+    is_game_event,
+    run_turn,
+    set_full_reply,
+    skip_platform_tts,
+    suppress_external_splitter,
+)
 from .hastsec import HastSecClient
 from .session import DEFAULT_UMO, resolve_umo
 from .token import load_token, token_path
@@ -137,6 +147,42 @@ class Mas3dGamePlugin(Star):
         if queue is None:
             return None
         return QueueTurnBridge(queue, umo=self.umo)
+
+    # ---------------------------------------------------------------- 回复捕获
+    # 游戏回合和 QQ 共用同一个 umo，所以 astrbot_plugin_splitter 也会处理它：
+    # 它把回复切成多段、每段绕过事件直接往 QQ 会话发，还会把 result 改写成
+    # 只剩最后一段（见插件 main.py:213/522-547）。下面两个钩子分别做两件事：
+    #   1. 在切分之前把模型的整轮文本记到事件上，run_turn 直接取用；
+    #   2. 给 result 打上该插件的私有标记，让它整条跳过，避免分段与 QQ 外泄。
+
+    @filter.on_llm_response()
+    async def _remember_llm_text(self, event: Any, response: Any) -> None:
+        """拿到模型整轮输出（含全部段落），比逐块拼接可靠。"""
+        if not is_game_event(event):
+            return
+        text = getattr(response, "completion_text", "") or ""
+        if isinstance(text, str):
+            set_full_reply(event, text)
+
+    @filter.on_decorating_result()
+    async def _freeze_reply(self, event: Any) -> None:
+        """把钩子链里的最终整段文本存下来，并挡住外部分段插件。"""
+        if not is_game_event(event):
+            return
+        getter = getattr(event, "get_result", None)
+        result = None
+        if callable(getter):
+            try:
+                result = getter()
+            except Exception:  # noqa: BLE001 - 取不到就只按块拼接
+                result = None
+        if result is None:
+            return
+        text = capture_result_text(result)
+        if text.strip():
+            set_full_reply(event, text)
+        suppress_external_splitter(result)
+        skip_platform_tts(result)
 
     async def handle_turn(self, text: str) -> str:
         """供 Task 12 的 Web API 调用：跑一回合并返回 Monika 的回复文本。"""

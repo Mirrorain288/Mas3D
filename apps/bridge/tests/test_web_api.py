@@ -510,3 +510,28 @@ def test_voice_audio_missing_404(web_api, make_client, tmp_path):
             f"/mas3d/api/voice/{voice_id}.wav", headers={"Authorization": f"Bearer {TOKEN}"}
         )
         assert response.status_code == 404
+
+
+def test_cors_preflight_allows_local_page(make_client):
+    client = make_client(StubRunner())
+    resp = client.options(
+        "/mas3d/api/health",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+
+    assert resp.status_code == 200
+    assert resp.headers["access-control-allow-origin"] == "http://localhost:5173"
+
+
+def test_cors_ignores_foreign_origin(make_client):
+    client = make_client(StubRunner())
+    resp = client.get(
+        "/mas3d/api/health",
+        headers={"Origin": "http://evil.example", "Authorization": f"Bearer {TOKEN}"},
+    )
+
+    assert "access-control-allow-origin" not in resp.headers
