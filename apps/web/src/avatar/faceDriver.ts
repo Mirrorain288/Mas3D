@@ -90,6 +90,7 @@ export class FaceDriver {
   private emotion: Emotion = 'neutral';
   private intensity = 0;
   private suppressed = false;
+  private blink = 0;
   private degraded = 0;
 
   constructor(meshes: MorphMesh[], map: FaceMap) {
@@ -115,6 +116,12 @@ export class FaceDriver {
     for (const vowel of VOWELS) {
       this.visemeTargets[vowel] = clamp01(visemes[vowel] ?? 0);
     }
+  }
+
+  /** 眨眼层：Tier 0 待机每 2.5–6 s 触发一次 90 ms 闭眼。 */
+  setBlink(weight: number): void {
+    this.blink = clamp01(weight);
+    this.apply();
   }
 
   setMouthSuppressed(on: boolean): void {
@@ -178,6 +185,11 @@ export class FaceDriver {
         continue;
       }
       weights.set(index, Math.max(weights.get(index) ?? 0, weight));
+    }
+
+    const blinkIndex = this.map.targets['Fcl_EYE_Close'];
+    if (blinkIndex !== undefined && this.blink > 0) {
+      weights.set(blinkIndex, Math.max(weights.get(blinkIndex) ?? 0, this.blink));
     }
 
     const influences = this.mesh?.morphTargetInfluences;

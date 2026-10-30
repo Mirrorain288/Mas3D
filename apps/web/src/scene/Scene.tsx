@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import type { Emotion, Gesture } from "@mas3d/protocol";
+import type { Emotion, Gaze, Gesture } from "@mas3d/protocol";
 import { createCameraRig, type CameraRig } from "./cameraRig";
 import { buildClassroom, type ClassroomBuild, type ClassroomKey } from "./classroom";
 import { createLights, type SceneLights } from "./lights";
 import { applySkybox, disposeSkybox, fallbackSky, SKY_1K_URL, SKY_2K_URL, type SkyboxHandle } from "./skybox";
 import { nextQuality, qualitySettings, type Quality } from "./qualityLadder";
+import { MonikaAvatar, type AvatarApi, type AvatarHost, type SeatPose } from "../avatar/MonikaAvatar";
 
 export interface SceneApi {
   setEmotion(emotion: Emotion, intensity: number): void;
+  setGaze(mode: Gaze): void;
   playGesture(gesture: Gesture, intensity: number): void;
 }
 
@@ -19,24 +21,27 @@ interface SceneProps {
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
 /**
- * 场景宿主：负责 WebGL 生命周期、资产装配、帧率自适应。
- * 对外的唯一接口是 SceneApi —— 角色的表情与手势都从这里进，
- * 具体怎么落到骨头上由 Task 6/8 的模块决定，本任务只记录意图。
+ * 场景宿主：负责 WebGL 生命周期、资产装配、帧率自适应，并把每帧回调
+ * 通过 AvatarHost 交给角色模块。对外只暴露 SceneApi 三个方法。
  */
 export function Scene({ onReady }: SceneProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
+  const avatarRef = useRef<AvatarApi | null>(null);
 
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState<"loading" | "ready" | "error">("loading");
   const [degraded, setDegraded] = useState<ClassroomKey[]>([]);
   const [skyFailed, setSkyFailed] = useState(false);
+  const [avatarState, setAvatarState] = useState<"loading" | "ready" | "placeholder">("loading");
   const [fatal, setFatal] = useState<string | null>(null);
+  const [host, setHost] = useState<AvatarHost | null>(null);
+  const [seat, setSeat] = useState<SeatPose | null>(null);
 
   useEffect(() => {
-    const host = hostRef.current;
-    if (!host) return;
+    const container = hostRef.current;
+    if (!container) return;
 
     let disposed = false;
     let frame = 0;
@@ -61,15 +66,29 @@ export function Scene({ onReady }: SceneProps) {
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
     renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    host.appendChild(renderer.domElement);
+    renderer.shadowMap.type = THREE.PCFShadowMap;
+    container.appendChild(renderer.domElement);
+
+    // 每帧回调：角色与后续的对话动效都挂在这里，由同一个 rAF 驱动
+    const ticks = new Set<(dtMs: number, nowMs: number) => void>();
+    const avatarHost: AvatarHost = {
+      scene,
+      camera,
+      addTick(fn) {
+        ticks.add(fn);
+        return () => {
+          ticks.delete(fn);
+        };
+      },
+    };
+    setHost(avatarHost);
 
     let quality: Quality = "high";
     let appliedSky: 1024 | 2048 = 2048;
 
     const resize = (): void => {
-      const width = host.clientWidth || window.innerWidth;
-      const height = host.clientHeight || window.innerHeight;
+      const width = container.clientWidth || window.innerWidth;
+      const height = container.clientHeight || window.innerHeight;
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, qualitySettings(quality).pixelRatio));
@@ -86,7 +105,6 @@ export function Scene({ onReady }: SceneProps) {
         }
         const previous = sky;
         sky = next;
-        // 换档位时只释放旧贴图，scene 已经指向新贴图
         if (previous && previous.url !== next.url) previous.texture?.dispose();
         setSkyFailed(false);
       } catch {
@@ -113,21 +131,15 @@ export function Scene({ onReady }: SceneProps) {
     resize();
     window.addEventListener("resize", resize);
 
-    const cues = {
-      emotion: "neutral" as Emotion,
-      emotionIntensity: 0,
-      gesture: null as Gesture | null,
-      gestureIntensity: 0,
-    };
-
     const api: SceneApi = {
       setEmotion(emotion: Emotion, intensity: number): void {
-        cues.emotion = emotion;
-        cues.emotionIntensity = clamp01(intensity);
+        avatarRef.current?.setEmotion(emotion, clamp01(intensity));
+      },
+      setGaze(mode: Gaze): void {
+        avatarRef.current?.setGaze(mode);
       },
       playGesture(gesture: Gesture, intensity: number): void {
-        cues.gesture = gesture;
-        cues.gestureIntensity = clamp01(intensity);
+        avatarRef.current?.playGesture(gesture, clamp01(intensity));
       },
     };
 
@@ -144,6 +156,10 @@ export function Scene({ onReady }: SceneProps) {
         scene.add(classroom.root);
         classroom.setShadows(qualitySettings(quality).shadows);
         setDegraded(classroom.degraded);
+        setSeat({ position: classroom.seat.position.clone(), facingY: classroom.seat.facingY });
+        if (import.meta.env.DEV) {
+          (window as unknown as { __mas3dClassroom?: unknown }).__mas3dClassroom = classroom;
+        }
         setProgress(1);
         setStatus("ready");
         onReadyRef.current?.(api);
@@ -187,8 +203,15 @@ export function Scene({ onReady }: SceneProps) {
       }
 
       rig?.update();
+      for (const fn of ticks) {
+        try {
+          fn(delta, now);
+        } catch (error) {
+          ticks.delete(fn);
+          console.error("[mas3d] 每帧回调出错，已移除该回调", error);
+        }
+      }
       renderer.render(scene, camera);
-      void delta;
     };
     frame = requestAnimationFrame(tick);
 
@@ -196,6 +219,9 @@ export function Scene({ onReady }: SceneProps) {
       disposed = true;
       cancelAnimationFrame(frame);
       window.removeEventListener("resize", resize);
+      ticks.clear();
+      setHost(null);
+      setSeat(null);
       rig?.dispose();
       classroom?.dispose();
       lights?.dispose();
@@ -205,10 +231,22 @@ export function Scene({ onReady }: SceneProps) {
     };
   }, []);
 
-  const showBanner = status === "ready" && (degraded.length > 0 || skyFailed);
+  const avatarNote = avatarState === "placeholder" ? "角色没能加载，已用占位人形代替。" : "";
+  const showBanner = status === "ready" && (degraded.length > 0 || skyFailed || avatarNote !== "");
 
   return (
     <div className="scene" ref={hostRef}>
+      {host && seat && (
+        <MonikaAvatar
+          host={host}
+          seat={seat}
+          onApi={(api) => {
+            avatarRef.current = api;
+          }}
+          onStatus={(next) => setAvatarState(next)}
+        />
+      )}
+
       {status === "loading" && (
         <div className="overlay">
           <p className="overlay-title">正在布置教室…</p>
@@ -222,10 +260,9 @@ export function Scene({ onReady }: SceneProps) {
       {showBanner && (
         <div className="banner" role="status">
           <span>
-            部分素材没能加载
-            {degraded.length > 0 ? `（${degraded.join(" / ")}）` : ""}
-            {skyFailed ? "，天空暂时是纯色" : ""}
-            ，已用占位物代替。
+            {degraded.length > 0 ? `部分素材没能加载（${degraded.join(" / ")}），已用占位物代替。` : ""}
+            {skyFailed ? "天空暂时是纯色。" : ""}
+            {avatarNote}
           </span>
           <button type="button" onClick={() => window.location.reload()}>
             重试

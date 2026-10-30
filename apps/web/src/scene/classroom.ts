@@ -14,11 +14,26 @@ export const CLASSROOM_ASSETS = {
 
 export type ClassroomKey = keyof typeof CLASSROOM_ASSETS;
 
+/** 坐面到 hips 骨骼的距离（米）：长凳坐面 + 这一点高度就是角色髋部该在的位置。 */
+const HIP_ABOVE_SEAT = 0.14;
+/** 座位道具加载失败时，退回到一个经验值，至少让角色坐得下去。 */
+const FALLBACK_HIP_Y = 0.5;
+/** 顶点高度分桶宽度（米）。 */
+const SEAT_BUCKET_M = 0.02;
+/** 候选坐面在道具总高里的位置区间：太低是地面，太高是桌面。 */
+const SEAT_MIN_RATIO = 0.22;
+const SEAT_MAX_RATIO = 0.62;
+
+/**
+ * 从道具几何里量出坐面：chairtable.glb 是桌+长凳合一的单个网格，没有独立节点，
+ * 所以把顶点按高度分桶，取「总高 22%–62% 区间内顶点最多」的水平面当坐面，
+ * 用该平面的顶点质心作为座位点，再抬高一点得到 hips 高度。
+ */
 export interface ClassroomBuild {
   root: THREE.Group;
   /** 加载失败、改用占位方块的槽位 */
   degraded: ClassroomKey[];
-  /** Monika 的座位锚点（世界坐标，y 为地面高度）：Task 6 用它落座 */
+  /** Monika 的座位锚点（世界坐标，y 为 hips 该在的高度） */
   seat: { position: THREE.Vector3; facingY: number };
   setShadows(enabled: boolean): void;
   dispose(): void;
@@ -65,6 +80,49 @@ function placeAt(object: THREE.Object3D, slot: Slot, scale: number): void {
   object.position.x += slot.position[0] - afterCenter.x;
   object.position.z += slot.position[1] - afterCenter.z;
   object.position.y += slot.bottomTo - after.min.y;
+}
+
+export function findSeatAnchor(object: THREE.Object3D): { position: THREE.Vector3; facingY: number } {
+  object.updateMatrixWorld(true);
+  const box = new THREE.Box3();
+  const point = new THREE.Vector3();
+  const buckets = new Map<number, { count: number; sx: number; sz: number }>();
+  object.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    const positions = mesh.geometry.getAttribute("position");
+    if (!positions) return;
+    for (let i = 0; i < positions.count; i += 1) {
+      point.fromBufferAttribute(positions, i).applyMatrix4(mesh.matrixWorld);
+      box.expandByPoint(point);
+      const key = Math.round(point.y / SEAT_BUCKET_M);
+      const bucket = buckets.get(key);
+      if (bucket) {
+        bucket.count += 1;
+        bucket.sx += point.x;
+        bucket.sz += point.z;
+      } else {
+        buckets.set(key, { count: 1, sx: point.x, sz: point.z });
+      }
+    }
+  });
+  if (!Number.isFinite(box.min.y) || buckets.size === 0) {
+    return { position: new THREE.Vector3(0, FALLBACK_HIP_Y, 0), facingY: 0 };
+  }
+  const height = box.max.y - box.min.y;
+  const lo = box.min.y + height * SEAT_MIN_RATIO;
+  const hi = box.min.y + height * SEAT_MAX_RATIO;
+  let best: { y: number; count: number; sx: number; sz: number } | null = null;
+  for (const [key, bucket] of buckets) {
+    const y = key * SEAT_BUCKET_M;
+    if (y < lo || y > hi) continue;
+    if (!best || bucket.count > best.count) best = { y, ...bucket };
+  }
+  if (!best) return { position: new THREE.Vector3(0, FALLBACK_HIP_Y, 0), facingY: 0 };
+  return {
+    position: new THREE.Vector3(best.sx / best.count, best.y + HIP_ABOVE_SEAT, best.sz / best.count),
+    facingY: 0,
+  };
 }
 
 function makePlaceholder(slot: Slot): THREE.Mesh {
@@ -281,17 +339,14 @@ export async function buildClassroom(
     root.add(node);
   }
 
-  const seatPosition = new THREE.Vector3(0, 0, 0);
-  if (seatObject) {
-    const box = new THREE.Box3().setFromObject(seatObject);
-    box.getCenter(seatPosition);
-    seatPosition.y = 0;
-  }
+  const seat = seatObject && !degraded.includes("seat")
+    ? findSeatAnchor(seatObject)
+    : { position: new THREE.Vector3(0, FALLBACK_HIP_Y, -0.5), facingY: 0 };
 
   return {
     root,
     degraded,
-    seat: { position: seatPosition, facingY: 0 },
+    seat,
     setShadows(enabled: boolean): void {
       root.traverse((child) => {
         if ((child as THREE.Mesh).isMesh) child.castShadow = enabled;

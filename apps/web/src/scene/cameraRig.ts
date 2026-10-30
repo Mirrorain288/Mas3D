@@ -34,7 +34,7 @@ export interface CameraRig {
   dispose(): void;
 }
 
-const DEFAULT_TARGET = new THREE.Vector3(0, 1.32, 0);
+const DEFAULT_TARGET = new THREE.Vector3(0, 1.02, 0);
 
 /**
  * 受限轨道相机：拖动改 yaw/pitch，滚轮改 distance，全部经过 clampOrbit。
@@ -45,7 +45,7 @@ export function createCameraRig(
   dom: HTMLElement,
   target: THREE.Vector3 = DEFAULT_TARGET.clone(),
 ): CameraRig {
-  let orbit: Orbit = { yaw: 0, pitch: 4, distance: 2.75 };
+  let orbit: Orbit = { yaw: 0, pitch: 6, distance: 2.95 };
   let pointerId: number | null = null;
   let lastX = 0;
   let lastY = 0;

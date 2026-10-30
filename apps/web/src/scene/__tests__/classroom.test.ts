@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as THREE from "three";
-import { buildClassroom, CLASSROOM_ASSETS } from "../classroom";
+import { buildClassroom, CLASSROOM_ASSETS, findSeatAnchor } from "../classroom";
 
 interface FakeLoader {
   loadAsync(url: string): Promise<{ scene: THREE.Group }>;
@@ -36,8 +36,29 @@ describe("buildClassroom", () => {
     const built = await buildClassroom(loaderThatFailsExcept(["seat"]) as never);
     expect(built.degraded.sort()).toEqual(["board", "lamp", "lectern"]);
     expect(Math.abs(built.seat.position.x)).toBeLessThan(0.01);
-    expect(built.seat.position.y).toBe(0);
+    // 立方体占位物没有可用的水平面，退回常量座高
+    expect(built.seat.position.y).toBeCloseTo(0.5, 2);
     built.dispose();
+  });
+
+  it("从桌凳合一的整体网格里量出坐面，不会落到桌面上", () => {
+    const geometry = new THREE.BufferGeometry();
+    const points: number[] = [];
+    const quad = (y: number, z0: number, z1: number) => {
+      points.push(-0.7, y, z0, 0.7, y, z0, 0.7, y, z1, -0.7, y, z1);
+    };
+    quad(0, -0.9, 0.1); // 地面附近
+    quad(0.4, -0.9, -0.55); // 坐面
+    quad(0.72, -0.2, 0.1); // 桌面
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute(points, 3));
+    const object = new THREE.Group();
+    object.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial()));
+
+    const anchor = findSeatAnchor(object);
+
+    expect(anchor.position.y).toBeCloseTo(0.54, 2); // 坐面 0.40 + hips 偏移 0.14
+    expect(anchor.position.z).toBeCloseTo(-0.725, 2); // 坐面质心
+    expect(anchor.facingY).toBe(0);
   });
 
   it("进度回调按槽位推进到 1", async () => {

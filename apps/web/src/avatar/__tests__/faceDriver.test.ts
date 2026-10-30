@@ -3,7 +3,7 @@ import { FaceDriver, resolveFaceMap, type FaceMap } from '../faceDriver';
 
 const testMap: FaceMap = {
   version: 1,
-  targets: { Fcl_ALL_Joy: 0, Fcl_MTH_Joy: 1, Fcl_MTH_A: 2 },
+  targets: { Fcl_ALL_Joy: 0, Fcl_MTH_Joy: 1, Fcl_MTH_A: 2, Fcl_EYE_Close: 3 },
   presets: {
     neutral: [],
     joy: [
@@ -18,7 +18,7 @@ const testMap: FaceMap = {
 };
 
 function make(meshCount = 1) {
-  const meshes = Array.from({ length: meshCount }, () => ({ morphTargetInfluences: [0, 0, 0] }));
+  const meshes = Array.from({ length: meshCount }, () => ({ morphTargetInfluences: [0, 0, 0, 0] }));
   return { meshes, driver: new FaceDriver(meshes, testMap) };
 }
 
@@ -69,6 +69,16 @@ describe('FaceDriver', () => {
     driver.setVisemes({});
     driver.update(1000);
     expect(meshes[0]!.morphTargetInfluences![2]).toBe(0);
+  });
+
+  it('merges the blink layer over the expression and clears it again', () => {
+    const { meshes, driver } = make();
+    driver.setEmotion('joy', 1);
+    driver.setBlink(1);
+    expect(meshes[0]!.morphTargetInfluences![3]).toBeCloseTo(1);
+    expect(meshes[0]!.morphTargetInfluences![0]).toBeCloseTo(0.8);
+    driver.setBlink(0);
+    expect(meshes[0]!.morphTargetInfluences![3]).toBe(0);
   });
 
   it('counts targets that the avatar does not actually have', () => {
