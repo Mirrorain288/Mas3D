@@ -5,6 +5,7 @@ import { loadSettings, normalizeSettings, saveSettings, type Settings } from "..
 import type { SceneApi } from "../scene/Scene";
 import { MAX_TURNS, type Turn } from "./store";
 import { useBridge } from "./useBridge";
+import { useVoice } from "./voice";
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
 
@@ -21,6 +22,19 @@ function queryToken(): string | null {
     return ENV_TOKEN;
   }
 }
+
+/** 语音端点与 WS 同源：把 ws:// 换成 http://（design D16：只走本机桥接）。 */
+function httpBase(wsUrl: string): string {
+  try {
+    const url = new URL(wsUrl);
+    url.protocol = url.protocol === "wss:" ? "https:" : "http:";
+    return url.origin;
+  } catch {
+    return "http://localhost:8787";
+  }
+}
+
+const VOICE_BASE = httpBase(BRIDGE_URL);
 
 const PHASE_LABEL: Record<string, string> = {
   idle: "待机",
@@ -82,8 +96,28 @@ export function ChatPanel({ api }: ChatPanelProps) {
     [],
   );
 
-  const bridge = useBridge(BRIDGE_URL, queryToken(), handlers);
+  const token = useMemo(() => queryToken(), []);
+  const bridge = useBridge(BRIDGE_URL, token, handlers);
   const busy = bridge.phase === "sending" || bridge.phase === "thinking" || bridge.phase === "streaming";
+
+  const voice = useVoice({
+    baseUrl: VOICE_BASE,
+    token,
+    api,
+    volume: settings.volume,
+    subtitlesOnly: settings.subtitlesOnly,
+    onNotice: setNotice,
+  });
+
+  // 每来一条新的 Monika 回复播一次语音；按 turn.id 去重，兜底台词（error 阶段）不配音
+  const spokenRef = useRef<string | null>(null);
+  useEffect(() => {
+    const last = bridge.turns[bridge.turns.length - 1];
+    if (!last || last.role !== "monika" || bridge.phase !== "idle") return;
+    if (spokenRef.current === last.id) return;
+    spokenRef.current = last.id;
+    voice.speak(last.text);
+  }, [bridge.turns, bridge.phase, voice]);
 
   useEffect(() => {
     api?.setCameraSensitivity(settings.cameraSensitivity);
@@ -132,10 +166,11 @@ export function ChatPanel({ api }: ChatPanelProps) {
   }, [bridge.turns]);
 
   const doClear = useCallback((): void => {
+    voice.stop();
     bridge.reset();
     setConfirmClear(false);
     setNotice(null);
-  }, [bridge]);
+  }, [bridge, voice]);
 
   return (
     <section className="chat" aria-label="与 Monika 的对话" data-phase={bridge.phase}>

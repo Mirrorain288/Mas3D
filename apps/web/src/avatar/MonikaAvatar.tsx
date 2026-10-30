@@ -2,13 +2,14 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { VRMLoaderPlugin, VRMUtils, type VRM, type VRMHumanBoneName } from "@pixiv/three-vrm";
-import type { Emotion, Gaze, Gesture, MotionPlan } from "@mas3d/protocol";
+import type { Emotion, Gaze, Gesture, MotionPlan, VoiceRef } from "@mas3d/protocol";
 import { Arbiter } from "@mas3d/motion";
 import { HastMotion } from "./hastMotion";
 import { FaceDriver, FALLBACK_FACE_MAP, resolveFaceMap, type MorphMesh } from "./faceDriver";
 import { BLINK_CLOSE_MS, mulberry32, nextBlink } from "./idle";
 import { gazeTarget } from "./gaze";
 import { applyPose, armHoldEndMs, type PoseBones } from "./applyPose";
+import { LipSync, type AudioContextLike } from "./lipsync";
 
 type Axis3 = { x: number; y: number; z: number };
 
@@ -50,6 +51,9 @@ export interface AvatarApi {
   holdArmsFor(plan: MotionPlan): void;
   /** 设置里的「视线灵敏度」：缩放头/颈/眼的跟随幅度，1 = 默认。 */
   setGazeSensitivity(mult: number): void;
+  /** 播一句语音并驱动口型（design D18）；resolve 于播放结束，异常由调用方兜底。 */
+  speakVoice(ref: VoiceRef, url: string, options?: { headers?: Record<string, string>; volume?: number }): Promise<void>;
+  stopVoice(): void;
 }
 
 export interface MonikaAvatarProps {
@@ -152,10 +156,18 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
     let driver: FaceDriver | null = null;
     let vrm: VRM | null = null;
     let placeholder: THREE.Mesh | null = null;
+    let audioCtx: AudioContext | null = null;
+    let lip: LipSync | null = null;
 
     const cleanup = (): void => {
       detachTick?.();
       detachTick = null;
+      lip?.dispose();
+      lip = null;
+      if (audioCtx) {
+        void audioCtx.close?.();
+        audioCtx = null;
+      }
       driver?.dispose();
       driver = null;
       if (vrm) {
@@ -320,6 +332,20 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
           loaded.update(dtMs / 1000);
         });
 
+        // 口型需要 AudioContext：第一次说话时才创建（浏览器要求用户手势之后才能出声）
+        const ensureLip = (): LipSync | null => {
+          if (!driver) return null;
+          if (!audioCtx) {
+            const Ctor =
+              (window as unknown as { AudioContext?: typeof AudioContext }).AudioContext ??
+              (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+            if (!Ctor) return null;
+            audioCtx = new Ctor();
+          }
+          if (!lip) lip = new LipSync(audioCtx as unknown as AudioContextLike, driver);
+          return lip;
+        };
+
         const api: AvatarApi = {
           setEmotion(emotion: Emotion, intensity: number): void {
             driver?.setEmotion(emotion, intensity);
@@ -341,6 +367,19 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
           setGazeSensitivity(mult: number): void {
             gazeSensitivity = Math.min(1.5, Math.max(0.5, mult));
           },
+          async speakVoice(ref: VoiceRef, url: string, options?: { headers?: Record<string, string>; volume?: number }): Promise<void> {
+            const player = ensureLip();
+            if (!player) return;
+            try {
+              await audioCtx?.resume?.();
+            } catch {
+              /* 浏览器拒绝恢复音频上下文时按静音处理，口型照旧 */
+            }
+            await player.play(ref, url, options);
+          },
+          stopVoice(): void {
+            lip?.stop();
+          },
         };
         apiRef.current = api;
         onApiRef.current?.(api);
@@ -354,6 +393,9 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
             api,
             arbiter,
             hastMotion,
+            get lip() {
+              return lip;
+            },
             stats: () => ({ ...stats, blinkWeight, blinkAt, now: performance.now() }),
             pose(): Record<string, unknown> {
               const out: Record<string, unknown> = {};

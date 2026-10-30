@@ -5,7 +5,8 @@
  *
  *   node tools/mock-bridge.mjs --port 8787 --scenario happy|timeout|error|command [--token TOKEN]
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { createServer } from "node:http";
 import { WebSocketServer } from "ws";
 
 const SCENARIOS = new Set(["happy", "timeout", "error", "command"]);
@@ -90,13 +91,180 @@ function commandPlan(text) {
   };
 }
 
-const server = new WebSocketServer({ host: options.host, port: options.port, path: "/mas3d/ws" });
+// --- 语音端点（Task 15：口型需要真实音频包络，脚本化 WAV 足够验证）-------------
+const VOICE_RATE = 32000;
+const VOICE_CACHE = new Map();
+const VOICE_CACHE_LIMIT = 64;
+
+function splitSentences(text) {
+  const parts = [];
+  let current = "";
+  for (const char of text) {
+    current += char;
+    if ("。！？.!?".includes(char)) {
+      if (current.trim()) parts.push(current.trim());
+      current = "";
+    }
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts.length ? parts : [text];
+}
+
+/** 带音节振幅调制的单声道 WAV：AnalyserNode 能读到明显起伏，口型才不会平。 */
+function makeWav(durationMs, seed) {
+  const frames = Math.round((VOICE_RATE * durationMs) / 1000);
+  const buffer = Buffer.alloc(44 + frames * 2);
+  buffer.write("RIFF", 0, "ascii");
+  buffer.writeUInt32LE(36 + frames * 2, 4);
+  buffer.write("WAVEfmt ", 8, "ascii");
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(1, 22);
+  buffer.writeUInt32LE(VOICE_RATE, 24);
+  buffer.writeUInt32LE(VOICE_RATE * 2, 28);
+  buffer.writeUInt16LE(2, 32);
+  buffer.writeUInt16LE(16, 34);
+  buffer.write("data", 36, "ascii");
+  buffer.writeUInt32LE(frames * 2, 40);
+  const base = 190 + (seed % 5) * 34;
+  for (let index = 0; index < frames; index += 1) {
+    const t = index / VOICE_RATE;
+    const envelope = 0.55 + 0.45 * Math.sin(2 * Math.PI * 3.1 * t + seed);
+    const syllable = 0.5 + 0.5 * Math.sin(2 * Math.PI * 4.4 * t);
+    const sample = Math.sin(2 * Math.PI * base * t) * envelope * syllable * 0.42;
+    buffer.writeInt16LE(Math.round(sample * 32767), 44 + index * 2);
+  }
+  return buffer;
+}
+
+function voicePayload(text, index) {
+  const sentences = splitSentences(text);
+  if (index < 0 || index >= sentences.length) return null;
+  const sentence = sentences[index];
+  const durationMs = Math.min(2600, Math.max(500, Math.round(sentence.length * 190)));
+  const english = "mock sentence " + (index + 1) + " of " + sentences.length;
+  const id = createHash("sha256").update(text + "|" + index + "|" + english).digest("hex").slice(0, 32);
+  if (!VOICE_CACHE.has(id)) {
+    VOICE_CACHE.set(id, makeWav(durationMs, index));
+    while (VOICE_CACHE.size > VOICE_CACHE_LIMIT) {
+      const oldest = VOICE_CACHE.keys().next().value;
+      VOICE_CACHE.delete(oldest);
+    }
+    log("synth:", "sentence=" + index, "durationMs=" + durationMs);
+  }
+  return {
+    id,
+    audioUrl: "/mas3d/api/voice/" + id + ".wav",
+    durationMs,
+    sentenceStartsMs: [0],
+    englishText: english,
+    sentenceIndex: index,
+    cached: false,
+  };
+}
+
+function readBody(request, limitBytes = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    request.on("data", (chunk) => {
+      size += chunk.length;
+      if (size > limitBytes) {
+        reject(new Error("body too large"));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+    request.on("error", reject);
+  });
+}
+
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "Authorization, Content-Type",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+};
+
+function authorized(request, url) {
+  if (!options.token) return true;
+  const header = String(request.headers.authorization ?? "");
+  const bearer = header.startsWith("Bearer ") ? header.slice(7) : null;
+  return (bearer ?? url.searchParams.get("token")) === options.token;
+}
+
+const server = createServer((request, response) => {
+  const url = new URL(request.url ?? "/", "http://" + options.host);
+  const sendJson = (status, payload) => {
+    response.writeHead(status, { ...CORS, "Content-Type": "application/json; charset=utf-8" });
+    response.end(JSON.stringify(payload));
+  };
+
+  if (request.method === "OPTIONS") {
+    response.writeHead(204, CORS);
+    response.end();
+    return;
+  }
+  if (url.pathname === "/mas3d/api/health") {
+    sendJson(200, { ok: true, plugin: "mock", umo: "mock", degraded: false });
+    return;
+  }
+  if (!authorized(request, url)) {
+    sendJson(401, { ok: false, code: "bad_request", message: "缺少或错误的令牌" });
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/mas3d/api/voice/synth") {
+    void readBody(request)
+      .then((raw) => {
+        let body;
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          sendJson(400, { ok: false, code: "bad_request", message: "body 不是 JSON" });
+          return;
+        }
+        const text = typeof body?.text === "string" ? body.text.trim() : "";
+        if (!text || text.length > 600) {
+          sendJson(400, { ok: false, code: "bad_request", message: "文本为空或超过 600 字" });
+          return;
+        }
+        const index = body?.sentence === undefined ? 0 : Number(body.sentence);
+        if (!Number.isInteger(index) || index < 0) {
+          sendJson(400, { ok: false, code: "bad_request", message: "句子下标不合法" });
+          return;
+        }
+        const voice = voicePayload(text, index);
+        if (!voice) {
+          sendJson(400, { ok: false, code: "bad_request", message: "句子下标越界" });
+          return;
+        }
+        sendJson(200, { ok: true, voice });
+      })
+      .catch(() => sendJson(400, { ok: false, code: "bad_request", message: "读取请求体失败" }));
+    return;
+  }
+  const audio = /^\/mas3d\/api\/voice\/([0-9a-f]{32})\.wav$/.exec(url.pathname);
+  if (request.method === "GET" && audio) {
+    const buffer = VOICE_CACHE.get(audio[1]);
+    if (!buffer) {
+      sendJson(404, { ok: false, code: "bad_request", message: "音频不存在" });
+      return;
+    }
+    response.writeHead(200, { ...CORS, "Content-Type": "audio/wav", "Content-Length": String(buffer.length) });
+    response.end(buffer);
+    return;
+  }
+  sendJson(404, { ok: false, code: "bad_request", message: "未知端点" });
+});
+
+const wss = new WebSocketServer({ server, path: "/mas3d/ws" });
 
 server.on("listening", () => {
   log("listening on ws://" + options.host + ":" + options.port + "/mas3d/ws", "scenario=" + options.scenario, options.token ? "token=on" : "token=off");
 });
 
-server.on("connection", (socket, request) => {
+wss.on("connection", (socket, request) => {
   const url = new URL(request.url ?? "/mas3d/ws", "http://" + options.host);
   if (options.token) {
     const provided = url.searchParams.get("token");
@@ -161,6 +329,8 @@ server.on("connection", (socket, request) => {
   });
 });
 
+server.listen(options.port, options.host);
+
 server.on("error", (error) => {
   process.stderr.write("[mock-bridge] " + (error instanceof Error ? error.message : String(error)) + "\n");
   process.exit(1);
@@ -168,6 +338,8 @@ server.on("error", (error) => {
 
 const shutdown = () => {
   log("shutting down");
+  for (const client of wss.clients) client.terminate();
+  wss.close();
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 300).unref();
 };

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import type { Emotion, Gaze, Gesture, MotionPlan } from "@mas3d/protocol";
+import type { Emotion, Gaze, Gesture, MotionPlan, VoiceRef } from "@mas3d/protocol";
 import { createCameraRig, type CameraRig } from "./cameraRig";
 import { buildClassroom, type ClassroomBuild, type ClassroomKey } from "./classroom";
 import { createLights, type SceneLights } from "./lights";
@@ -18,6 +18,9 @@ export interface SceneApi {
   setCameraSensitivity(mult: number): void;
   /** 设置面板的视线灵敏度（0.5–1.5），立即生效。 */
   setGazeSensitivity(mult: number): void;
+  /** 播一句语音并驱动口型；headers 里带桥接令牌。 */
+  speakVoice(ref: VoiceRef, url: string, options?: { headers?: Record<string, string>; volume?: number }): Promise<void>;
+  stopVoice(): void;
 }
 
 interface SceneProps {
@@ -155,6 +158,12 @@ export function Scene({ onReady }: SceneProps) {
       },
       setGazeSensitivity(mult: number): void {
         avatarRef.current?.setGazeSensitivity(mult);
+      },
+      async speakVoice(ref: VoiceRef, url: string, options?: { headers?: Record<string, string>; volume?: number }): Promise<void> {
+        await avatarRef.current?.speakVoice(ref, url, options);
+      },
+      stopVoice(): void {
+        avatarRef.current?.stopVoice();
       },
     };
 
