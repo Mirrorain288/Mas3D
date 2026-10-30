@@ -9,6 +9,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@mas3d/motion": "workspace:^",
     "@mas3d/protocol": "workspace:^",
     "@pixiv/three-vrm": "^3.5.5",
     "react": "^19.3.1",

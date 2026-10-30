@@ -2,10 +2,12 @@ import { useEffect, useRef } from "react";
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { VRMLoaderPlugin, VRMUtils, type VRM, type VRMHumanBoneName } from "@pixiv/three-vrm";
-import type { Emotion, Gaze, Gesture } from "@mas3d/protocol";
+import type { Emotion, Gaze, Gesture, MotionPlan } from "@mas3d/protocol";
+import { Arbiter } from "@mas3d/motion";
 import { FaceDriver, FALLBACK_FACE_MAP, resolveFaceMap, type MorphMesh } from "./faceDriver";
 import { BLINK_CLOSE_MS, mulberry32, nextBlink } from "./idle";
 import { gazeTarget } from "./gaze";
+import { applyPose, armHoldEndMs, type PoseBones } from "./applyPose";
 
 export const VRM_URL = "/assets/monika/Monika.vrm";
 
@@ -25,7 +27,10 @@ export interface SeatPose {
 export interface AvatarApi {
   setEmotion(emotion: Emotion, intensity: number): void;
   setGaze(mode: Gaze): void;
-  playGesture(gesture: Gesture, intensity: number): void;
+  /** 返回是否被仲裁器接受（被 Tier2 占用手臂、或强度不足以抢占时返回 false）。 */
+  playGesture(gesture: Gesture, intensity: number): boolean;
+  /** Tier2（HAST-SEC）动作用到了手臂：按计划的 delay+hold 占住手臂，期间挡下 Tier1 的手部动作。 */
+  holdArmsFor(plan: MotionPlan): void;
 }
 
 export interface MonikaAvatarProps {
@@ -199,6 +204,22 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
         const spine = loaded.humanoid.getNormalizedBoneNode("spine");
         const leftEye = loaded.humanoid.getNormalizedBoneNode("leftEye");
         const rightEye = loaded.humanoid.getNormalizedBoneNode("rightEye");
+        const leftUpperArm = loaded.humanoid.getNormalizedBoneNode("leftUpperArm");
+        const rightUpperArm = loaded.humanoid.getNormalizedBoneNode("rightUpperArm");
+
+        // Tier1 手势仲裁：时间由渲染循环注入，可确定性测试
+        const arbiter = new Arbiter();
+        const idleBone = { rotation: { x: 0, y: 0, z: 0 } };
+        const bones: PoseBones = {
+          head: head ?? idleBone,
+          neck: neck ?? idleBone,
+          spine: spine ?? idleBone,
+          upperArmL: leftUpperArm ?? idleBone,
+          upperArmR: rightUpperArm ?? idleBone,
+        };
+        // applyPose 是叠加式的，手臂每帧必须先回到坐姿基准，否则会累加漂移
+        const armBaseZ = { l: leftUpperArm?.rotation.z ?? 0, r: rightUpperArm?.rotation.z ?? 0 };
+        let armsOwnedUntilMs = 0;
         const base = {
           chestX: chest?.rotation.x ?? 0,
           spineX: spine?.rotation.x ?? 0,
@@ -234,6 +255,15 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
           if (leftEye) leftEye.rotation.set(gaze.pitch * EYE_FOLLOW, gaze.yaw * EYE_FOLLOW, 0);
           if (rightEye) rightEye.rotation.set(gaze.pitch * EYE_FOLLOW, gaze.yaw * EYE_FOLLOW, 0);
 
+          if (leftUpperArm) leftUpperArm.rotation.z = armBaseZ.l;
+          if (rightUpperArm) rightUpperArm.rotation.z = armBaseZ.r;
+          if (armsOwnedUntilMs > 0 && nowMs >= armsOwnedUntilMs) {
+            armsOwnedUntilMs = 0;
+            arbiter.setArmOwnedByTier2(false, nowMs);
+          }
+          const gestureSample = arbiter.sample(nowMs);
+          if (gestureSample.gesture !== "none") applyPose(bones, gestureSample.delta, 1);
+
           if (nowMs >= blinkAt) {
             blinkStart = nowMs;
             blinkAt = nextBlink(nowMs, rnd);
@@ -255,8 +285,15 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
           setGaze(mode: Gaze): void {
             gazeMode = mode;
           },
-          playGesture(): void {
-            // Task 8 接入手势仲裁；此处保留接口，避免上层先崩
+          playGesture(gesture: Gesture, intensity: number): boolean {
+            return arbiter.request(gesture, intensity, performance.now());
+          },
+          holdArmsFor(plan: MotionPlan): void {
+            const holdMs = armHoldEndMs(plan.intents, plan.timing);
+            if (holdMs <= 0) return;
+            const now = performance.now();
+            armsOwnedUntilMs = Math.max(armsOwnedUntilMs, now + holdMs);
+            arbiter.setArmOwnedByTier2(true, now);
           },
         };
         apiRef.current = api;
@@ -269,6 +306,7 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
             vrm: loaded,
             driver,
             api,
+            arbiter,
             stats: () => ({ ...stats, blinkWeight, blinkAt, now: performance.now() }),
             pose(): Record<string, unknown> {
               const out: Record<string, unknown> = {};

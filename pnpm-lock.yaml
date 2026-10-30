@@ -14,6 +14,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@mas3d/motion':
+        specifier: workspace:^
+        version: link:../../packages/motion
       '@mas3d/protocol':
         specifier: workspace:^
         version: link:../../packages/protocol

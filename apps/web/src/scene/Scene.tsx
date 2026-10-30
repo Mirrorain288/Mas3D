@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import type { Emotion, Gaze, Gesture } from "@mas3d/protocol";
+import type { Emotion, Gaze, Gesture, MotionPlan } from "@mas3d/protocol";
 import { createCameraRig, type CameraRig } from "./cameraRig";
 import { buildClassroom, type ClassroomBuild, type ClassroomKey } from "./classroom";
 import { createLights, type SceneLights } from "./lights";
@@ -11,7 +11,9 @@ import { MonikaAvatar, type AvatarApi, type AvatarHost, type SeatPose } from "..
 export interface SceneApi {
   setEmotion(emotion: Emotion, intensity: number): void;
   setGaze(mode: Gaze): void;
-  playGesture(gesture: Gesture, intensity: number): void;
+  playGesture(gesture: Gesture, intensity: number): boolean;
+  /** 把 Tier2 动作计划的持续时长告诉角色，期间挡下 Tier1 的手部动作。 */
+  holdArmsFor(plan: MotionPlan): void;
 }
 
 interface SceneProps {
@@ -138,8 +140,11 @@ export function Scene({ onReady }: SceneProps) {
       setGaze(mode: Gaze): void {
         avatarRef.current?.setGaze(mode);
       },
-      playGesture(gesture: Gesture, intensity: number): void {
-        avatarRef.current?.playGesture(gesture, clamp01(intensity));
+      playGesture(gesture: Gesture, intensity: number): boolean {
+        return avatarRef.current?.playGesture(gesture, clamp01(intensity)) ?? false;
+      },
+      holdArmsFor(plan: MotionPlan): void {
+        avatarRef.current?.holdArmsFor(plan);
       },
     };
 

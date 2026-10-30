@@ -24,7 +24,7 @@ export const GESTURE_AMPLITUDE: Record<Gesture, PoseDelta> = {
   nod: { headPitch: 0.17, headYaw: 0, headRoll: 0, spineBend: 0.03, armRaiseL: 0, armRaiseR: 0 },
   shake: { headPitch: 0, headYaw: 0.22, headRoll: 0, spineBend: 0, armRaiseL: 0, armRaiseR: 0 },
   tilt: { headPitch: 0, headYaw: 0, headRoll: 0.28, spineBend: 0, armRaiseL: 0, armRaiseR: 0 },
-  wave: { headPitch: -0.04, headYaw: 0, headRoll: 0.08, spineBend: 0, armRaiseL: 0, armRaiseR: 0.9 },
+  wave: { headPitch: -0.04, headYaw: 0, headRoll: 0.08, spineBend: 0, armRaiseL: 0, armRaiseR: 2.9 },
   lean_in: { headPitch: 0.1, headYaw: 0, headRoll: 0, spineBend: 0.14, armRaiseL: 0, armRaiseR: 0 },
   look_away: { headPitch: 0, headYaw: 0.34, headRoll: 0.06, spineBend: 0, armRaiseL: 0, armRaiseR: 0 },
 };
