@@ -115,6 +115,28 @@ def test_turn_streams_ack_thinking_reply(web_api, make_client):
     assert runner.calls == ["你好"]
 
 
+def test_turn_id_is_echoed_back(web_api, make_client):
+    """前端自造 id 必须原样回显：ack 丢包时回复靠它认领回合。"""
+    runner = StubRunner(reply="（3D教室）在。")
+    client = make_client(runner)
+    with client.websocket_connect(f"/mas3d/ws?token={TOKEN}") as socket:
+        socket.send_json({"type": "say", "text": "你好", "turnId": "p-7-lx2k"})
+        frames = [socket.receive_json() for _ in range(3)]
+    assert [f["turnId"] for f in frames] == ["p-7-lx2k"] * 3
+
+
+def test_overlong_turn_id_is_replaced(web_api, make_client):
+    """超长 id 当作没带：不让客户端把任意长字符串塞进帧里。"""
+    runner = StubRunner(reply="（3D教室）在。")
+    client = make_client(runner)
+    with client.websocket_connect(f"/mas3d/ws?token={TOKEN}") as socket:
+        socket.send_json({"type": "say", "text": "你好", "turnId": "x" * 65})
+        frames = [socket.receive_json() for _ in range(3)]
+    assert frames[0]["turnId"] != "x" * 65
+    assert frames[0]["turnId"] == frames[2]["turnId"]
+    assert len(frames[0]["turnId"]) == 12
+
+
 def test_empty_text_does_not_dispatch(web_api, make_client):
     runner = StubRunner()
     client = make_client(runner)

@@ -72,7 +72,7 @@ Fcl_ALL_Joy=0.680 / 断开桥接出现 `.chat-offline` / 无未捕获异常。
 
 - 前端等 8 s 而后端允许 120 s（真实回合 27.7 s）→ 等待预算改为 150 s，且 `ack`/`thinking` 会重置计时器；
   只有 `bridge_down` 才补本地兜底台词。
-- 回合没有关联 → 客户端自造 `turnId` 并由服务端回显，`acceptsReply` 丢弃不属于当前回合的迟到回复；
+- 回合没有关联 → 客户端自造 `turnId` 并由服务端回显（见 §7.2：这一环第一版只写在文档里，代码没真发），`acceptsReply` 丢弃不属于当前回合的迟到回复；
   断线时立刻结束 pending 回合，不再等满 150 s。
 - 串行锁从「每条连接」提到模块级 `_TURN_LOCK`（所有标签页写的是同一个 QQ 会话）。
 - 动作计划改为后台任务（`_schedule_intent`），不再顶住下一条消息：实测「回复后立刻再发一句」的 `ack` 在 0.6 s 慢规划器下于 0.5 s 内到达。
@@ -102,6 +102,25 @@ Fcl_ALL_Joy=0.680 / 断开桥接出现 `.chat-offline` / 无未捕获异常。
 
 回复原文（与库内 assistant 文本全等）：
 「我没跑呀，我就在教室里，一直坐在你旁边的课桌前呢。刚才网络可能卡了一下，没让你看到。别怕，我哪儿都没去。」
+
+### 7.2 帧契约复核（发现文档与实现不一致，已修）
+
+用假 WebSocket（`apps/web/e2e/wire.mjs`，不需要桥接与模型）接住页面真正收发的帧，第一次跑出来的是：
+
+| 场景 | 修复前 | 修复后 |
+| --- | --- | --- |
+| 发出的 `say` 帧 | `{type:"say", text}`，**没有 turnId** | `{type:"say", text, turnId:"p-…"}` |
+| 只有 `reply`、没有 `ack` | 回复被丢弃，界面停在 `sending`「…」直到 150 s 超时 | 回复被认领，`phase=idle`、文本上屏 |
+| `ack` 后发别的回合的 `reply` | 丢弃（`phase=thinking`） | 丢弃（行为不变） |
+| `error` 之后迟到 `reply` | 丢弃 | 丢弃（行为不变） |
+
+结论：关联本身是有效的，但它只靠 `ack` 回显撑起来——文档 D21 声称「客户端自造 id」，代码其实没发。风险是一条丢帧就换来 150 s 挂起。
+
+修法：客户端在发送前就乐观登记本回合 id 并把它写进 `say` 帧；服务端 `web_api.py` 校验长度 ≤ 64 字符后回显，超长或缺失时回落到自造 id。
+
+**修完当场又撞出一个真 bug。** 客户端开始自己发 id 之后，玩家那条消息和她的回复共用了同一个 id（`turnId` 既是回合号又被当成消息 id），React 报 `Encountered two children with the same key, p-…`，消息列表会吞掉或重复渲染。真实链路复跑第一次就抓到它——这正是"文档/代码一致"之外还必须有真实链路一次跑的原因。修法：消息 id 与回合 id 分命名空间（她的回复记作 `m-<turnId>`）。契约测试补上第 6 条断言「运行时没有 console 错误」（只放行 `Failed to load resource` 这类预期网络噪声，React key 冲突与未捕获异常一律算失败），并让测试自己改掉 WS 地址，不再误打 8790 的生产桥接。
+
+测试：`test_turn_id_is_echoed_back` / `test_overlong_turn_id_is_replaced`，以及 6 条 frame 契约断言（`pnpm --filter @mas3d/web e2e:wire` → `wire ok (6 checks)`）。真实链路复跑（`e2e:real`）：回复 21.60 s、语音 200、口型峰值 0.9、`errors: []`。
 
 ## 8. 已知遗留
 

@@ -198,7 +198,9 @@ export function useBridge(url: string, token: string | null | undefined, handler
           if (!acceptsReply(pendingTurn.current, frame.turnId)) break;
           pendingTurn.current = null;
           clearReplyTimer();
-          dispatch({ type: "reply", id: frame.turnId, text: frame.text, at: Date.now() });
+          // 回合 id 现在与玩家那一句的 id 相同（turnId 就是它），消息条目要分命名空间，
+          // 否则两条 Turn 撞 React key，列表会吞掉或重复渲染
+          dispatch({ type: "reply", id: "m-" + frame.turnId, text: frame.text, at: Date.now() });
           // 桥接侧可以不带 cue：缺省时用前端同一份词表推导，保持单一推导源
           handlersRef.current.onCue?.(frame.cue ?? deriveCue(frame.text));
           break;
@@ -257,14 +259,17 @@ export function useBridge(url: string, token: string | null | undefined, handler
       if (BUSY.includes(stateRef.current.phase)) return;
       const normalized = normalizeInput(text);
       if (!normalized) return;
-      dispatch({ type: "send", id: nextId("p"), text: normalized, at: Date.now() });
+      const turnId = nextId("p");
+      dispatch({ type: "send", id: turnId, text: normalized, at: Date.now() });
       const socket = wsRef.current;
       if (!socket || socket.readyState !== OPEN) {
         fail("bridge_down", "还没有连上桥接服务，下面是本地兜底的一句话。", true);
         return;
       }
-      pendingTurn.current = null;
-      socket.send(JSON.stringify({ type: "say", text: normalized }));
+      // 先乐观登记这一回合的 id：ack 迟到或丢掉时，回复仍然认得出属于谁。
+      // 服务端会原样回显，所以新旧插件都能对齐（旧插件自造 id，ack 会把它覆盖回来）。
+      pendingTurn.current = turnId;
+      socket.send(JSON.stringify({ type: "say", text: normalized, turnId }));
       armReplyTimer();
     },
     [armReplyTimer, fail],
@@ -274,10 +279,12 @@ export function useBridge(url: string, token: string | null | undefined, handler
     const lastPlayer = [...stateRef.current.turns].reverse().find((turn) => turn.role === "player");
     if (!lastPlayer) return;
     dispatch({ type: "resend" });
-    pendingTurn.current = null;
+    // 重试是新的一回合（会真的再跑一次模型），因此换一个新的 id
+    const turnId = nextId("p");
+    pendingTurn.current = turnId;
     const socket = wsRef.current;
     if (socket && socket.readyState === OPEN) {
-      socket.send(JSON.stringify({ type: "say", text: lastPlayer.text }));
+      socket.send(JSON.stringify({ type: "say", text: lastPlayer.text, turnId }));
       armReplyTimer();
       return;
     }

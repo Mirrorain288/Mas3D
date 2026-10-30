@@ -8,7 +8,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "e2e": "node e2e/smoke.mjs",
-    "e2e:real": "node e2e/real-chain.mjs"
+    "e2e:real": "node e2e/real-chain.mjs",
+    "e2e:wire": "node e2e/wire.mjs"
   },
   "dependencies": {
     "@mas3d/motion": "workspace:^",

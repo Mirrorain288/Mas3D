@@ -45,6 +45,8 @@ RATE_LIMIT_TURNS = 5
 RATE_LIMIT_WINDOW_S = 10.0
 
 PLAN_TIMEOUT_S = 9.0
+# 与前端 nextId("p") 生成的长度上限一致；超长的 id 视为没带，回落到服务端自造
+MAX_TURN_ID_CHARS = 64
 """POST /mas3d/api/motion/plan 的整体预算；HAST-SEC 客户端自己还有更短的超时。"""
 
 MAX_HISTORY = 8
@@ -295,7 +297,11 @@ class TurnSession:
         self._sent.append(now)
 
         raw_turn_id = payload.get("turnId")
-        turn_id = raw_turn_id if isinstance(raw_turn_id, str) and raw_turn_id else uuid.uuid4().hex[:12]
+        # 客户端自造 id（前端 nextId("p")，形如 p-3-lx2k）：只当回显用，限长避免被塞长字符串
+        if isinstance(raw_turn_id, str) and 0 < len(raw_turn_id) <= MAX_TURN_ID_CHARS:
+            turn_id = raw_turn_id
+        else:
+            turn_id = uuid.uuid4().hex[:12]
 
         await websocket.send_json({"type": "ack", "turnId": turn_id})
         await websocket.send_json({"type": "thinking", "turnId": turn_id})

@@ -213,7 +213,7 @@ An independent review of the finished branch found the failure mode that mock te
 
 The rules:
 
-- The client sends its own `turnId`; the server echoes it on every frame of that turn. `acceptsReply(pending, turnId)` drops any reply that does not match the turn being waited on, so a slow turn can never answer a newer question.
+- The client sends its own `turnId` and registers it *before* the ack; the server echoes it on every frame of that turn. `acceptsReply(pending, turnId)` drops any reply that does not match the turn being waited on, so a slow turn can never answer a newer question, and a lost `ack` no longer strands a reply that did arrive.
 - The client wait budget (150 s) is strictly larger than the server's turn timeout (120 s). The server is the only place allowed to declare a turn dead, otherwise both sides race.
 - `ack` and `thinking` re-arm the wait timer: the budget measures silence, not elapsed time.
 - Only `bridge_down` produces the local fallback line. A timeout or a model error leaves the transcript alone — she may already have answered, and inventing “I did not hear you” next to a real reply is worse than saying nothing.
@@ -221,6 +221,10 @@ The rules:
 - The whole conversation is serialised across connections, not just within one: every tab writes to the same QQ history.
 
 *Why the mock could not catch it:* the scripted bridge answers in 760 ms, so a timeout of 8 s or 800 s is indistinguishable there. The budget is now asserted against the real chain time recorded in verification.md, and `VITE_MAS3D_REPLY_TIMEOUT_MS` exists only to make it smaller for mock runs.
+
+**The first version of this claim was false, and a probe caught it.** A fake-WebSocket harness (now `apps/web/e2e/wire.mjs`, no bridge and no model needed) showed the client sending only `{type:"say", text}`: correlation worked solely because the server generated an id and the client adopted it from the `ack`. That is one dropped frame away from a 150 s hang — the reply arrives, matches nothing, and is discarded. The client now sends the id and registers it optimistically, the server bounds it to 64 characters and echoes it, and the probe asserts all four behaviours (frame carries an id, reply survives a missing ack, a foreign id is still dropped, a reply after `error` is ignored).
+
+A second, related bug surfaced only after that fix: with the client minting the id, the player's message and her reply shared one string, and React refused the duplicate key (`two children with the same key`). Message ids are now namespaced apart from turn ids (`m-<turnId>`, `<turnId>-plan`, `f-*`), and the contract test fails on any runtime console error, not just on a wrong phase.
 
 Two smaller divorces fixed in the same round: the frontend prefix stripper now loops to a bound like the Python one, and `validatePlan` (TypeScript) and `validate_plan` (Python) are pinned to a single shared fixture (`packages/protocol/test/fixtures/plan-cases.json`) so the two hand-written validators cannot drift apart — `reply: null` in particular means *absent* on both sides.
 ## Risks / Trade-offs
