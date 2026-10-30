@@ -66,7 +66,27 @@ Fcl_ALL_Joy=0.680 / 断开桥接出现 `.chat-offline` / 无未捕获异常。
 - `--scenario error`：错误卡 + 重试按钮；重试重发最后一条输入。
 - 刷新页面：从 `localStorage['mas3d.transcript']` 恢复最近 ≤50 回合（实测 3 条，含 backend 灰底消息）。
 
-## 7. 已知遗留
+## 7. 独立代码审查后的修复（同一分支）
+
+审查（fresh 上下文、只读）报出的 8 条问题已修，其中 2 条是真实链路上会翻车的：
+
+- 前端等 8 s 而后端允许 120 s（真实回合 27.7 s）→ 等待预算改为 150 s，且 `ack`/`thinking` 会重置计时器；
+  只有 `bridge_down` 才补本地兜底台词。
+- 回合没有关联 → 客户端自造 `turnId` 并由服务端回显，`acceptsReply` 丢弃不属于当前回合的迟到回复；
+  断线时立刻结束 pending 回合，不再等满 150 s。
+- 串行锁从「每条连接」提到模块级 `_TURN_LOCK`（所有标签页写的是同一个 QQ 会话）。
+- 动作计划改为后台任务（`_schedule_intent`），不再顶住下一条消息：实测「回复后立刻再发一句」的 `ack` 在 0.6 s 慢规划器下于 0.5 s 内到达。
+- 整轮回复改为「先写者胜」（`set_full_reply`），TECH.md 里 `active_event_registry` 失效的描述改成实际行为（抛 `TurnDispatchError`，不会静默用 chunks 兜底）。
+- 断线自动重连（1 s → 8 s 退避），横幅按钮调用 `reconnect()` 而不是 `location.reload()`。
+  实测：杀 mock → 横幅 → 重启 mock → 自动回到 `data-bridge=online` 且横幅消失，pageerror 0。
+- 资源释放：StrictMode 双跑时丢弃的 22 MB VRM 走 `VRMUtils.deepDispose`；`LipSync.finish()` 断开 analyser/gain 并兑现 pending promise；导出下载的 `revokeObjectURL` 延后一轮事件循环。
+- 前后端重复实现归一：`stripScenePrefix` 前端改为循环剥（与 `session.strip_scene_prefix` 同语义）；
+  `validatePlan` 与 `validate_plan` 由同一份 `packages/protocol/test/fixtures/plan-cases.json`（13 例）双向锁定，`reply: null` 两侧都当缺省。
+
+回归结果：pytest 101 passed（含 test_plan_contract.py 13 例）；`pnpm -r test` protocol 20 / motion 9 / web 79；
+`pnpm --filter @mas3d/web build` 通过（1,030.08 kB / gzip 275.09 kB）；`pnpm --filter @mas3d/web e2e` 8 checks 全过。
+
+## 8. 已知遗留
 
 1. 前端单包 1.03 MB 未拆包（vite 提示 chunk>500 kB）。
 2. AstrBot 必须用桌面版启动器 `astrbot-desktop-tauri.exe` 启动；直接跑 `launch_backend.py` 会解析到错误的 data 目录。

@@ -162,7 +162,8 @@ export function ChatPanel({ api }: ChatPanelProps) {
     link.href = href;
     link.download = "mas3d-transcript.json";
     link.click();
-    URL.revokeObjectURL(href);
+    // 同步 revoke 会在部分浏览器里取消正在进行的下载，交给下一轮事件循环
+    window.setTimeout(() => URL.revokeObjectURL(href), 0);
     setNotice("已导出最近 " + payload.turns.length + " 条记录（不含令牌）。");
   }, [bridge.turns]);
 
@@ -178,7 +179,7 @@ export function ChatPanel({ api }: ChatPanelProps) {
       {bridge.offline && (
         <div className="chat-offline" role="status">
           <span>桥接服务没有响应，先由本地兜底回话。</span>
-          <button type="button" onClick={() => window.location.reload()}>
+          <button type="button" onClick={bridge.reconnect}>
             重新连接
           </button>
         </div>

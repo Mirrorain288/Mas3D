@@ -200,6 +200,30 @@ async def test_run_turn_prefers_full_reply_extra(adapter, multi_bridge):
 
 
 @pytest.mark.asyncio
+async def test_full_reply_keeps_the_first_writer(adapter, session_mod):
+    """后写的钩子不许覆盖先写的整轮文本：结果链当前长度不是真相。"""
+
+    class _Sink:
+        def __init__(self) -> None:
+            self.chunks: list[str] = []
+
+        async def __call__(self, text: str) -> None:
+            self.chunks.append(text)
+
+    sink = _Sink()
+    event = adapter.GameMessageEvent("你好", umo=session_mod.DEFAULT_UMO, on_send=sink)
+    adapter.set_full_reply(event, "第一段。第二段。")
+    adapter.set_full_reply(event, "第二段。")
+
+    assert adapter.extra_text(event, adapter.FULL_REPLY_EXTRA) == "第一段。第二段。"
+    # 空串不许占位，否则后面真正的整轮文本会被挡掉
+    other = adapter.GameMessageEvent("你好", umo=session_mod.DEFAULT_UMO, on_send=sink)
+    adapter.set_full_reply(other, "   ")
+    adapter.set_full_reply(other, "真正的整轮文本。")
+    assert adapter.extra_text(other, adapter.FULL_REPLY_EXTRA) == "真正的整轮文本。"
+
+
+@pytest.mark.asyncio
 async def test_run_turn_falls_back_to_chunks(adapter, bridge_factory):
     bridge = bridge_factory("（3D教室）只有一块。")
 

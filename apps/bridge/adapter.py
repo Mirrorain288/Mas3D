@@ -68,8 +68,15 @@ def extra_text(event: Any, key: str) -> str:
 
 
 def set_full_reply(event: Any, text: str) -> None:
-    """把整轮回复记到事件上，供 run_turn 直接取用。"""
+    """把整轮回复记到事件上，供 run_turn 直接取用。
+
+    先写者胜：LLM 的 completion_text 是最早、最完整的形态；后续钩子只在它缺席时
+    补齐（例如纯工具回合没有 completion_text）。反过来让后写覆盖，就等于把结果链
+    当前的长度当成真相——那正是「只拿到最后一段」这个 bug 的成因。
+    """
     if not isinstance(text, str) or not text.strip():
+        return
+    if extra_text(event, FULL_REPLY_EXTRA):
         return
     try:
         event.set_extra(FULL_REPLY_EXTRA, text)

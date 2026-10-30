@@ -27,18 +27,35 @@ export const MAX_TURNS = 50;
 export const SCENE_PREFIX = "（3D教室）";
 export const TRANSCRIPT_KEY = "mas3d.transcript";
 
-/** 去掉注入的教室前缀，两种括号都认（模型有时会把全角转半角）。 */
+const SCENE_PREFIXES: readonly string[] = [SCENE_PREFIX, "(3D教室)"];
+
+/**
+ * 去掉注入的教室前缀，两种括号都认（模型有时会把全角转半角），多层也剥干净。
+ * 与桥接侧 session.strip_scene_prefix 保持同一语义：循环剥到不再命中为止。
+ */
 export function stripScenePrefix(text: string): string {
-  const head = text.trimStart();
-  for (const prefix of [SCENE_PREFIX, "(3D教室)"]) {
-    if (head.startsWith(prefix)) return head.slice(prefix.length).trimStart();
+  let out = text;
+  for (let guard = 0; guard < 4; guard += 1) {
+    const head = out.trimStart();
+    const hit = SCENE_PREFIXES.find((prefix) => head.startsWith(prefix));
+    if (!hit) break;
+    out = head.slice(hit.length);
   }
-  return text;
+  return out === text ? text : out.trimStart();
 }
 
 /** 单行化 + 截断到协议上限，空白输入返回空串。 */
 export function normalizeInput(text: string): string {
   return text.replace(/[\r\n]+/g, " ").trim().slice(0, MAX_INPUT_CHARS);
+}
+
+/**
+ * 只接受「当前这一回合」的回复。
+ * 桥接一回合最长 120 秒（TURN_TIMEOUT_S），而玩家可能在超时提示后立刻再问一句；
+ * 若不看 turnId，前一回合迟到的回复会落到新回合上，变成一问两答。
+ */
+export function acceptsReply(pendingTurnId: string | null, turnId: string): boolean {
+  return pendingTurnId !== null && pendingTurnId === turnId;
 }
 
 export function emptyState(turns: Turn[] = []): ChatState {

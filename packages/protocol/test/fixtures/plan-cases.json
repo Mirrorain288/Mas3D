@@ -1,0 +1,309 @@
+{
+  "cases": [
+    {
+      "name": "command with one intent",
+      "ok": true,
+      "plan": {
+        "base": {
+          "change": false,
+          "name": "坐姿待机",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "command",
+        "timing": "同时",
+        "intents": [
+          {
+            "key": "right-挥手打招呼",
+            "speed": 1,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "command with base change only",
+      "ok": true,
+      "plan": {
+        "base": {
+          "change": true,
+          "name": "前倾",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "command",
+        "timing": "同时",
+        "intents": []
+      }
+    },
+    {
+      "name": "command without intent or base change",
+      "ok": false,
+      "plan": {
+        "base": {
+          "change": false,
+          "name": "坐姿待机",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "command",
+        "timing": "同时",
+        "intents": []
+      }
+    },
+    {
+      "name": "chat carrying intents",
+      "ok": false,
+      "plan": {
+        "base": {
+          "change": false,
+          "name": "坐姿待机",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "chat",
+        "timing": "同时",
+        "intents": [
+          {
+            "key": "right-挥手打招呼",
+            "speed": 1,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "unsupported with empty intents",
+      "ok": true,
+      "plan": {
+        "base": {
+          "change": false,
+          "name": "坐姿待机",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "unsupported",
+        "timing": "同时",
+        "intents": []
+      }
+    },
+    {
+      "name": "speed below range",
+      "ok": false,
+      "plan": {
+        "base": {
+          "change": false,
+          "name": "坐姿待机",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "command",
+        "timing": "同时",
+        "intents": [
+          {
+            "key": "right-挥手打招呼",
+            "speed": 0.39,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "speed at upper bound",
+      "ok": true,
+      "plan": {
+        "base": {
+          "change": false,
+          "name": "坐姿待机",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "command",
+        "timing": "同时",
+        "intents": [
+          {
+            "key": "right-挥手打招呼",
+            "speed": 2,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "delay at upper bound",
+      "ok": true,
+      "plan": {
+        "base": {
+          "change": false,
+          "name": "坐姿待机",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "command",
+        "timing": "依次",
+        "intents": [
+          {
+            "key": "right-挥手打招呼",
+            "speed": 1,
+            "strength": 0.8,
+            "hold": 20,
+            "delay": 30
+          }
+        ]
+      }
+    },
+    {
+      "name": "reply null is an absent reply",
+      "ok": true,
+      "plan": {
+        "base": {
+          "change": false,
+          "name": "坐姿待机",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "command",
+        "timing": "同时",
+        "intents": [
+          {
+            "key": "right-挥手打招呼",
+            "speed": 1,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          }
+        ],
+        "reply": null
+      }
+    },
+    {
+      "name": "reply over 600 chars",
+      "ok": false,
+      "plan": {
+        "base": {
+          "change": false,
+          "name": "坐姿待机",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "command",
+        "timing": "同时",
+        "intents": [
+          {
+            "key": "right-挥手打招呼",
+            "speed": 1,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          }
+        ],
+        "reply": "她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她她"
+      }
+    },
+    {
+      "name": "five intents",
+      "ok": false,
+      "plan": {
+        "base": {
+          "change": false,
+          "name": "坐姿待机",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "command",
+        "timing": "同时",
+        "intents": [
+          {
+            "key": "right-挥手打招呼",
+            "speed": 1,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          },
+          {
+            "key": "right-挥手打招呼",
+            "speed": 1,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          },
+          {
+            "key": "right-挥手打招呼",
+            "speed": 1,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          },
+          {
+            "key": "right-挥手打招呼",
+            "speed": 1,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          },
+          {
+            "key": "right-挥手打招呼",
+            "speed": 1,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "unknown timing",
+      "ok": false,
+      "plan": {
+        "base": {
+          "change": false,
+          "name": "坐姿待机",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "command",
+        "timing": "并行",
+        "intents": [
+          {
+            "key": "right-挥手打招呼",
+            "speed": 1,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          }
+        ]
+      }
+    },
+    {
+      "name": "empty base name",
+      "ok": false,
+      "plan": {
+        "base": {
+          "change": false,
+          "name": "",
+          "motion": 0,
+          "rest": true
+        },
+        "operation": "command",
+        "timing": "同时",
+        "intents": [
+          {
+            "key": "right-挥手打招呼",
+            "speed": 1,
+            "strength": 0.8,
+            "hold": 2,
+            "delay": 0
+          }
+        ]
+      }
+    }
+  ]
+}

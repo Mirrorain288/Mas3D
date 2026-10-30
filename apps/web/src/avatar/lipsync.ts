@@ -48,6 +48,7 @@ export interface SourceLike {
 export interface GainLike {
   gain: { value: number };
   connect(target: unknown): unknown;
+  disconnect?(): void;
 }
 
 /** AudioContext 的最小结构，测试里可以塞假实现。 */
@@ -88,6 +89,7 @@ export class LipSync {
 
   private source: SourceLike | null = null;
   private analyser: AnalyserLike | null = null;
+  private gain: GainLike | null = null;
   private samples = new Float32Array(ANALYSER_FFT);
   private words: string[] = [];
   private sentenceStarts: number[] = [];
@@ -129,6 +131,7 @@ export class LipSync {
 
     this.source = source;
     this.analyser = analyser;
+    this.gain = gain ?? null;
     this.words = ref.englishText.split(/\s+/).filter((word) => word.length > 0);
     this.sentenceStarts = ref.sentenceStartsMs.slice();
     this.durationMs = Math.max(1, ref.durationMs || Math.round((buffer.duration ?? 0) * 1000));
@@ -185,7 +188,6 @@ export class LipSync {
   dispose(): void {
     this.finish();
     this.clearRecover();
-    this.analyser = null;
   }
 
   private inGap(elapsed: number): boolean {
@@ -206,9 +208,8 @@ export class LipSync {
 
   private finish(): void {
     const source = this.source;
-    const hadState = this.speaking || source !== null || this.analyser !== null;
+    const hadState = this.speaking || source !== null;
     this.source = null;
-    this.analyser = null;
     this.speaking = false;
     this.lastMouth = 0;
     this.mouth = 0;
@@ -227,16 +228,40 @@ export class LipSync {
         /* 已被浏览器回收 */
       }
     }
-    if (!hadState && this.recoverTimer === null) return;
+    this.releaseNodes();
+    // 先兑现 play() 的 promise，再安排抑制恢复：没有状态时也不能留下悬挂的 await
+    const done = this.onEnded;
+    this.onEnded = null;
+    if (done) done();
+    if (!hadState) return;
     this.sink.setVisemes({});
     this.clearRecover();
     this.recoverTimer = setTimeout(() => {
       this.recoverTimer = null;
       this.sink.setMouthSuppressed(false);
     }, MOUTH_RECOVER_MS);
-    const done = this.onEnded;
-    this.onEnded = null;
-    if (done) done();
+  }
+
+  /** 把音频节点从图上摘下来：analyser 与 gain 每句都新建，不摘会一直挂在 AudioContext 上。 */
+  private releaseNodes(): void {
+    const analyser = this.analyser;
+    this.analyser = null;
+    if (analyser) {
+      try {
+        analyser.disconnect();
+      } catch {
+        /* 已被浏览器回收 */
+      }
+    }
+    const gain = this.gain;
+    this.gain = null;
+    if (gain?.disconnect) {
+      try {
+        gain.disconnect();
+      } catch {
+        /* 同上 */
+      }
+    }
   }
 
   private clearRecover(): void {

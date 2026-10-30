@@ -97,8 +97,9 @@ export function validatePlan(raw: unknown): MotionPlan {
     fail(`${op} plan must not carry intents`);
   }
   const plan: MotionPlan = { base: planBase, operation: op, timing: timing as Timing, intents };
+  // reply 的 null 与缺失等价：Python 侧 validate_plan 也这么判，跨语言契约不许分叉
   const reply = raw['reply'];
-  if (reply !== undefined) {
+  if (reply !== undefined && reply !== null) {
     if (typeof reply !== 'string') fail('plan.reply must be a string');
     if (reply.length > MAX_REPLY) fail(`plan.reply must be at most ${MAX_REPLY} characters`);
     plan.reply = reply;

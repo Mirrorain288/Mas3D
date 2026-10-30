@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import * as THREE from "three";
-import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { GLTFLoader, type GLTF } from "three/examples/jsm/loaders/GLTFLoader.js";
 import { VRMLoaderPlugin, VRMUtils, type VRM, type VRMHumanBoneName } from "@pixiv/three-vrm";
 import type { Emotion, Gaze, Gesture, MotionPlan, VoiceRef } from "@mas3d/protocol";
 import { Arbiter } from "@mas3d/motion";
@@ -130,6 +130,12 @@ function placeSeated(vrm: VRM, seat: SeatPose): void {
   vrm.scene.updateMatrixWorld(true);
 }
 
+/** 丢弃一个已经不需要的 glTF：VRM 走 deepDispose，普通 glTF 走同一套纹理/几何回收。 */
+function disposeGltf(gltf: GLTF): void {
+  const loaded = gltf.userData.vrm as VRM | undefined;
+  VRMUtils.deepDispose((loaded ? loaded.scene : gltf.scene) as THREE.Object3D);
+}
+
 function makePlaceholder(): THREE.Mesh {
   const geometry = new THREE.CapsuleGeometry(0.22, 0.8, 6, 12);
   const material = new THREE.MeshStandardMaterial({ color: 0x3d4a6b, roughness: 0.8 });
@@ -144,7 +150,6 @@ function makePlaceholder(): THREE.Mesh {
  * 由 Scene 的渲染循环通过 host.addTick 驱动。
  */
 export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps): null {
-  const apiRef = useRef<AvatarApi | null>(null);
   const onApiRef = useRef(onApi);
   const onStatusRef = useRef(onStatus);
   onApiRef.current = onApi;
@@ -181,7 +186,6 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
         (placeholder.material as THREE.Material).dispose();
         placeholder = null;
       }
-      apiRef.current = null;
       onApiRef.current?.(null);
     };
 
@@ -192,7 +196,11 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
     loader.load(
       VRM_URL,
       (gltf) => {
-        if (disposed) return;
+        if (disposed) {
+          // StrictMode 下 effect 会跑两遍：第一遍的 22 MB VRM 必须在这里释放
+          disposeGltf(gltf);
+          return;
+        }
         const loaded = gltf.userData.vrm as VRM | undefined;
         if (!loaded) {
           onStatusRef.current?.("placeholder", "VRM 插件没有返回角色");
@@ -381,7 +389,6 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
             lip?.stop();
           },
         };
-        apiRef.current = api;
         onApiRef.current?.(api);
         onStatusRef.current?.("ready");
 

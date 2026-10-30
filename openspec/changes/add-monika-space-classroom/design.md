@@ -194,6 +194,35 @@ Speech, the Tier 0 idle, and the expression presets all want `Fcl_MTH_*`. Rule: 
 
 Voice is **on by default** (user decision): the first reply in a fresh session is already audible, and the "subtitles only" switch in settings is the single escape hatch — it stops synthesis entirely rather than muting playback, so no requests are made while it is off.
 
+### D20 — The whole reply is captured, and the platform send path is diverted
+
+Because the game turn shares the QQ umo (D1), every plugin bound to that umo also processes it. Acceptance exposed the consequence: `astrbot_plugin_splitter` runs last (`priority = -100000000000000000`) and rewrote `result.chain` into the fifth of five segments, posting each segment itself through `context.send_message(event.unified_msg_origin, …)`. The WS therefore only ever received the last sentence while the database held the full reply. The rules that came out of it:
+
+- The turn text is stored from `on_llm_response` (`response.completion_text`) and again from `on_decorating_result` (`result.get_plain_text()`), both into an event extra; the send-boundary chunk collection is only the fallback.
+- For game events the result is marked with the splitter own idempotence flag (`__splitter_processed`), so it neither re-segments nor posts to QQ.
+- For game events only, `ResultContentType.LLM_RESULT` is downgraded to `GENERAL_RESULT`: text is still delivered, but `result_decorate` skips its TTS branch. That TTS is keyed on the shared umo through `SessionServiceManager`, cannot be disabled per event, cost ~80 s per turn, and failed with HTTP 400 whenever the translated line contained an emoji.
+- Cross-origin access from the page to the bridge is required for voice, so CORS is opened for `http://localhost|127.0.0.1(:port)` only; the token stays in the `Authorization` header and credentials are not allowed.
+
+*Why not turn the splitter off in its own config:* that is machine state, not repository state, and forking a third-party plugin breaks on its next release. Reusing a flag it already treats as idempotence costs nothing and degrades to the earlier behaviour instead of failing.
+
+Acceptance compares the WS text with the conversation row verbatim (D14) precisely because a plausible-looking reply hid this for a full round.
+
+### D21 — A turn has an identity, and the wire is allowed to be slower than the mock
+
+An independent review of the finished branch found the failure mode that mock testing was structurally blind to: the client gave up after 8 s while the server allowed 120 s, and `ack`/`thinking` did not re-arm the timer, so **every real turn (measured 27.7 s) would have been declared a timeout** and answered with a local fallback line before the real reply arrived. The same review found that replies carried no correlation, so a late frame from turn N could be rendered as the answer to turn N+1.
+
+The rules:
+
+- The client sends its own `turnId`; the server echoes it on every frame of that turn. `acceptsReply(pending, turnId)` drops any reply that does not match the turn being waited on, so a slow turn can never answer a newer question.
+- The client wait budget (150 s) is strictly larger than the server's turn timeout (120 s). The server is the only place allowed to declare a turn dead, otherwise both sides race.
+- `ack` and `thinking` re-arm the wait timer: the budget measures silence, not elapsed time.
+- Only `bridge_down` produces the local fallback line. A timeout or a model error leaves the transcript alone — she may already have answered, and inventing “I did not hear you” next to a real reply is worse than saying nothing.
+- A closed socket ends the pending turn immediately instead of waiting out 150 s, and reconnects with exponential backoff (1 s → 8 s). The banner's button calls `reconnect()` rather than reloading the page, so a plugin reload (TECH.md's documented upgrade risk) no longer loses the scene.
+- The whole conversation is serialised across connections, not just within one: every tab writes to the same QQ history.
+
+*Why the mock could not catch it:* the scripted bridge answers in 760 ms, so a timeout of 8 s or 800 s is indistinguishable there. The budget is now asserted against the real chain time recorded in verification.md, and `VITE_MAS3D_REPLY_TIMEOUT_MS` exists only to make it smaller for mock runs.
+
+Two smaller divorces fixed in the same round: the frontend prefix stripper now loops to a bound like the Python one, and `validatePlan` (TypeScript) and `validate_plan` (Python) are pinned to a single shared fixture (`packages/protocol/test/fixtures/plan-cases.json`) so the two hand-written validators cannot drift apart — `reply: null` in particular means *absent* on both sides.
 ## Risks / Trade-offs
 
 - **Every game turn pollutes the QQ conversation** (user-requested, but it grows a 1.38 MB history) → marker prefix for readability, no extra context injected by the game, and a per-session turn counter surfaced in settings so the cost is visible; if it becomes a nuisance, the marker plus umo are both configuration values, so a dedicated classroom umo is a one-line change.
@@ -209,6 +238,8 @@ Voice is **on by default** (user decision): the first reply in a fresh session i
 - **GPT-SoVITS and the QQ bot compete for one GPU** → single-concurrency queue, 30 s/60 s timeouts, cache hits served from disk, and a "subtitles only" switch that stops all synthesis.
 - **Chinese→English translation can drift in tone** (the translator is tuned for a streamer persona) → the visible text is always the original Chinese reply; translation only affects audio and mouth shapes, and a translation failure still produces audio.
 - **A wrong viseme map is more uncanny than none** → L2 is bounded by the L0 envelope, mappings live in one constants module with unit tests over a word list, and disabling L2 leaves a working amplitude-driven mouth.
+- **Two validators, one contract** (`validatePlan` in TypeScript, `validate_plan` in Python) → both are driven by one shared fixture with 13 agree/disagree cases, so a rule change on one side fails the other side's suite.
+- **Platform plugins act on game turns too** (the shared umo is the point of D1) → the whole reply is captured before the send path, the result is marked so the segmenting plugin skips, and acceptance compares the WS text with the database row verbatim; a future plugin with a later priority can still mutate the chain, and that comparison is what catches it.
 - **The empty VRM expression binds tempt a runtime patch** → the face driver reads `primitive.extras.targetNames` and falls back to the committed `face.map.json`; the 22 MB avatar is never rewritten, so it stays byte-identical to the source and re-importable.
 
 ## Migration Plan

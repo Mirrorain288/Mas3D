@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
+import time
 
 import pytest
 from fastapi.testclient import TestClient
@@ -371,6 +373,29 @@ def test_ws_intent_failure_is_silent(plugin, web_api, make_client):
         assert socket.receive_json()["type"] == "reply"
         socket.send_json({"type": "say", "text": "还在吗"})
         assert socket.receive_json()["type"] == "ack"
+
+
+def test_slow_planner_does_not_block_the_next_turn(web_api, make_client):
+    """动作后端最多 9 秒，绝不能顶住下一句话——否则前端会看到「秒回却被判超时」。"""
+
+    class SlowPlannerRunner(PlannerRunner):
+        async def handle_plan(self, text, context=()):
+            await asyncio.sleep(0.6)
+            return await super().handle_plan(text, context)
+
+    runner = SlowPlannerRunner(COMMAND_PLAN)
+    client = make_client(runner)
+    with client.websocket_connect(f"/mas3d/ws?token={TOKEN}") as socket:
+        socket.send_json({"type": "say", "text": "抬起右手"})
+        assert socket.receive_json()["type"] == "ack"
+        assert socket.receive_json()["type"] == "thinking"
+        assert socket.receive_json()["type"] == "reply"
+        started = time.monotonic()
+        socket.send_json({"type": "say", "text": "还在吗"})
+        frame = socket.receive_json()
+        elapsed = time.monotonic() - started
+    assert frame["type"] == "ack", frame
+    assert elapsed < 0.5, elapsed
 
 
 VOICE_ID = "a" * 32

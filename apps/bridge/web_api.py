@@ -48,6 +48,8 @@ PLAN_TIMEOUT_S = 9.0
 """POST /mas3d/api/motion/plan 的整体预算；HAST-SEC 客户端自己还有更短的超时。"""
 
 MAX_HISTORY = 8
+# 跨连接共用一个回合锁：所有标签页写的是同一个 QQ 会话
+_TURN_LOCK = asyncio.Lock()
 """给动作后端看的最近上下文条数（hastsec.build_context 会再收窄到 4 条 / 1200 字）。"""
 
 VOICE_TIMEOUT_S = 70.0
@@ -253,6 +255,7 @@ class TurnSession:
         self._timeout_s = turn_timeout_s
         self._sent: deque[float] = deque()
         self._history: deque[dict[str, str]] = deque(maxlen=MAX_HISTORY)
+        self._tasks: set[asyncio.Task[None]] = set()
 
     def _prune(self, now: float) -> None:
         window = now - RATE_LIMIT_WINDOW_S
@@ -298,7 +301,9 @@ class TurnSession:
         await websocket.send_json({"type": "thinking", "turnId": turn_id})
 
         try:
-            reply = await asyncio.wait_for(self._runner.handle_turn(cleaned), timeout=self._timeout_s)
+            # 跨连接串行：同一个 QQ 会话只有一条时间线，两个标签页同时说话会让回合交错写进历史
+            async with _TURN_LOCK:
+                reply = await asyncio.wait_for(self._runner.handle_turn(cleaned), timeout=self._timeout_s)
         except asyncio.TimeoutError:
             await _send_error(websocket, "timeout", "模型这次没有回应", turn_id)
             return
@@ -317,13 +322,35 @@ class TurnSession:
             return
         # 不带 cue：表情由前端 deriveCue 推导（design.md D6），桥接只回原文
         await websocket.send_json({"type": "reply", "turnId": turn_id, "text": str(reply)})
-        await self._maybe_intent(websocket, turn_id, cleaned, str(reply))
+        context = list(self._history)
+        self._history.append({"role": "user", "content": text})
+        self._history.append({"role": "assistant", "content": reply})
+        # 动作后端最多 9 秒，不能顶住下一条消息；回合文本已经落 history，帧带 turnId 可乱序到达
+        self._schedule_intent(websocket, turn_id, cleaned, str(reply), context)
 
-    async def _maybe_intent(self, websocket: WebSocket, turn_id: str, text: str, reply: str) -> None:
+    def _schedule_intent(
+        self,
+        websocket: WebSocket,
+        turn_id: str,
+        text: str,
+        reply: str,
+        context: list[dict[str, str]],
+    ) -> None:
+        task = asyncio.create_task(self._maybe_intent(websocket, turn_id, text, reply, context))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _maybe_intent(
+        self,
+        websocket: WebSocket,
+        turn_id: str,
+        text: str,
+        reply: str,
+        context: list[dict[str, str]],
+    ) -> None:
         """回复之后问一句动作后端；只有 command 计划才发 intent 帧，失败静默降级。"""
         planner = getattr(self._runner, "handle_plan", None)
         if planner is not None:
-            context = list(self._history)
             plan: Any = None
             try:
                 plan = await asyncio.wait_for(planner(text, context), timeout=PLAN_TIMEOUT_S)
@@ -337,9 +364,10 @@ class TurnSession:
                 and isinstance(plan.get("intents"), list)
                 and plan["intents"]
             ):
-                await websocket.send_json({"type": "intent", "turnId": turn_id, "plan": plan})
-        self._history.append({"role": "user", "content": text})
-        self._history.append({"role": "assistant", "content": reply})
+                try:
+                    await websocket.send_json({"type": "intent", "turnId": turn_id, "plan": plan})
+                except (RuntimeError, WebSocketDisconnect):
+                    pass  # 玩家已经关掉页面，动作计划没有接收方
 
 
 async def _send_error(websocket: WebSocket, code: str, message: str, turn_id: str | None = None) -> None:

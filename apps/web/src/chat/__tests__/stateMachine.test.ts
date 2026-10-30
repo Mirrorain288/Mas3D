@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { emptyState, MAX_TURNS, normalizeInput, reduce, stripScenePrefix, type ChatState, type Turn } from "../store";
+import { acceptsReply, emptyState, MAX_TURNS, normalizeInput, reduce, stripScenePrefix, type ChatState, type Turn } from "../store";
+import { REPLY_TIMEOUT_MS } from "../useBridge";
 
 const at = 1_700_000_000_000;
 
@@ -97,11 +98,33 @@ describe("对话状态机", () => {
     expect(restored.turns[0]?.text).toBe("第 10 条");
   });
 
+  it("多层前缀一次剥净，且不改动没有前缀的文本", () => {
+    expect(stripScenePrefix("（3D教室）（3D教室）你好")).toBe("你好");
+    expect(stripScenePrefix("  (3D教室) （3D教室） 你好")).toBe("你好");
+    expect(stripScenePrefix("（3D教室）")).toBe("");
+    expect(stripScenePrefix("你好（3D教室）")).toBe("你好（3D教室）");
+  });
+
+  it("只接受当前回合的回复", () => {
+    expect(acceptsReply("turn-1", "turn-1")).toBe(true);
+    // 上一回合迟到：玩家已经问了新的一句，这条不能落到新回合上
+    expect(acceptsReply("turn-2", "turn-1")).toBe(false);
+    // 还没收到 ack，任何回复都对不上号
+    expect(acceptsReply(null, "turn-1")).toBe(false);
+  });
+
   it("reset 清空消息与错误", () => {
     const dirty = reduce(send(emptyState(), "你好"), { type: "error", code: "model_error", message: "模型不可用" });
     const cleared = reduce(dirty, { type: "reset" });
     expect(cleared.phase).toBe("idle");
     expect(cleared.turns).toHaveLength(0);
     expect(cleared.error).toBeNull();
+  });
+});
+describe("reply budget", () => {
+  // 服务端 TURN_TIMEOUT_S=120；前端必须比它更耐心，否则真实回合（实测 27.7 s，
+  // 模型慢时更久）会先被判超时，然后她的真回复迟到，被 acceptsReply 丢掉。
+  it("比服务端的回合上限更宽", () => {
+    expect(REPLY_TIMEOUT_MS).toBeGreaterThan(120_000);
   });
 });

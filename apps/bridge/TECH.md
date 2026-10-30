@@ -17,7 +17,7 @@
 | `ResultContentType.LLM_RESULT` | `astrbot/core/message/message_event_result.py:208` | 把游戏回合的内容类型降为 `GENERAL_RESULT`，跳过 `result_decorate` 的 TTS 分支 | 枚举改名 → 跳过失效，每回合多 20 秒且大概率 400 |
 | `MessageEventResult.get_plain_text()` | 同文件 `:149` | 从结果链里取纯文本 | 取不到 → 退回 `sent_chunks` 拼接 |
 | `MessageEventResult` 可 `setattr` | 同文件 `:224`（dataclass，无 `__slots__`） | 打上 `__splitter_processed`，让分段插件整条跳过 | 加不了属性 → 分段插件重新切段并直投 QQ |
-| `active_event_registry._events` | `astrbot/core/utils/active_event_registry.py` | 判断事件是否已被管线消费完（回合结束的信号） | 私有字段改名 → 回合超时；改走 `sent_chunks` 已有超时兜底 |
+| `active_event_registry._events` | `astrbot/core/utils/active_event_registry.py` | 判断事件是否已被管线消费完（回合结束的信号） | 私有字段改名 → 8 秒内看不到事件入队即抛 `TurnDispatchError`，回合以 `bridge_down` 结束（不会静默用 `sent_chunks` 兜底） |
 | `context.get_event_queue()` | `astrbot/core/star/context.py` | 把事件投进 AstrBot 的 `event_queue` | 拿不到 → 插件标记 `degraded=true`，`/health` 明示 |
 
 ## 2. 刻意不用的东西
