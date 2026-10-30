@@ -91,23 +91,23 @@
     },
     {
       "source": "素材/StylooClassroomAssetPack GLTF & FBX/StylooClassroomAssetPack GLTF & FBX/classroom/GLTF/desk.glb",
-      "target": "apps/web/public/assets/classroom/desk.glb",
+      "target": "apps/web/public/assets/classroom/lectern.glb",
       "kind": "glb",
       "transform": "copy",
       "bytes": 57416,
       "sha256": "52e9a85ba9b7f4ca02021bb6e28d575d70ce05f1d24231fc5aefccd7f0e8aa85"
     },
     {
-      "source": "素材/StylooClassroomAssetPack GLTF & FBX/StylooClassroomAssetPack GLTF & FBX/classroom/GLTF/chair.glb",
-      "target": "apps/web/public/assets/classroom/chair.glb",
+      "source": "素材/StylooClassroomAssetPack GLTF & FBX/StylooClassroomAssetPack GLTF & FBX/classroom/GLTF/chairtable.glb",
+      "target": "apps/web/public/assets/classroom/seat.glb",
       "kind": "glb",
       "transform": "copy",
-      "bytes": 49544,
-      "sha256": "ba4aa2f942a8e06ff63be42111e25e2f2b3e4d09390168ca8ba50fc4a0553693"
+      "bytes": 138104,
+      "sha256": "c4a91c84dbc552dd4466e17cb3054d5a545cb83f44b1611737652a74a69c9b93"
     },
     {
       "source": "素材/StylooClassroomAssetPack GLTF & FBX/StylooClassroomAssetPack GLTF & FBX/classroom/GLTF/blackboardbig.glb",
-      "target": "apps/web/public/assets/classroom/blackboard.glb",
+      "target": "apps/web/public/assets/classroom/board.glb",
       "kind": "glb",
       "transform": "copy",
       "bytes": 15552,
@@ -115,7 +115,7 @@
     },
     {
       "source": "素材/StylooClassroomAssetPack GLTF & FBX/StylooClassroomAssetPack GLTF & FBX/classroom/GLTF/lamp.glb",
-      "target": "apps/web/public/assets/classroom/light.glb",
+      "target": "apps/web/public/assets/classroom/lamp.glb",
       "kind": "glb",
       "transform": "copy",
       "bytes": 84068,
