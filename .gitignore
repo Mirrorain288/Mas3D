@@ -70,3 +70,7 @@ obj/
 .env
 .env.local
 *.local
+.pytest_cache/
+
+# AstrBot 在插件目录下的 cwd 里自己生成的运行时数据（不是我们的源码）
+/data/

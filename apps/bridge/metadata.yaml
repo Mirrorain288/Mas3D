@@ -1,0 +1,8 @@
+name: astrbot_plugin_mas3d_game
+display_name: Mas3D 太空教室
+desc: "把浏览器里的 Mas3D 太空教室接进 AstrBot：游戏对话写入同一个 Monika 会话，并回传表情与动作意图。"
+short_desc: "Web3D 太空教室的桥接插件"
+author: Mirrorain288
+version: 0.1.0
+repo: https://github.com/Mirrorain288/Mas3D
+astrbot_version: ">=4.28,<5"

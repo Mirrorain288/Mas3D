@@ -1,0 +1,2 @@
+# AstrBot 运行环境已提供 fastapi / starlette / aiohttp，这里只列插件额外用到的
+httpx>=0.27
