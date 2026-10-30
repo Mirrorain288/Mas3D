@@ -23,14 +23,17 @@ import json
 import time
 import uuid
 from collections import deque
+from pathlib import Path
 from typing import Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from .adapter import TurnDispatchError
 from .hastsec import BackendUnavailable, PlanRejected
+from .tts import MAX_TEXT_CHARS as MAX_VOICE_CHARS
+from .tts import TtsUnavailable
 
 MAX_INPUT_CHARS = 300
 """与 packages/protocol/src/frames.ts:30 的 MAX_INPUT_CHARS 保持一致。"""
@@ -45,6 +48,9 @@ PLAN_TIMEOUT_S = 9.0
 
 MAX_HISTORY = 8
 """给动作后端看的最近上下文条数（hastsec.build_context 会再收窄到 4 条 / 1200 字）。"""
+
+VOICE_TIMEOUT_S = 70.0
+"""POST /mas3d/api/voice/synth 的整体预算；客户端自己还有单句 30s / 整轮 60s 两层超时。"""
 
 LOCAL_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
 """允许的来源主机。testclient 只会出现在进程内 ASGI 测试传输里，不可能来自真实 socket。"""
@@ -140,6 +146,65 @@ def create_app(
         if not isinstance(plan, dict):
             return JSONResponse({"ok": False, "code": "bridge_down", "message": "动作后端没有计划"}, status_code=503)
         return JSONResponse({"ok": True, "plan": plan})
+
+    @app.post("/mas3d/api/voice/synth")
+    async def voice_synth(request: Request, _: None = Depends(require_token)) -> JSONResponse:
+        """把一句台词合成成 WAV（design.md D16 / D17）。
+
+        body: {"text": "...", "sentence"?: n}。不带 sentence 合成整轮并合并成一段；
+        带 sentence 只合成第 n 句，前端据此「边播第 n 句、边合成第 n+1 句」。
+        降级语义：GPT-SoVITS 没起来就 503 + bridge_down，前端只显示字幕。
+        """
+        try:
+            payload = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse({"ok": False, "code": "bad_request", "message": "body 必须是 JSON"}, status_code=400)
+        if not isinstance(payload, dict):
+            return JSONResponse({"ok": False, "code": "bad_request", "message": "body 必须是 JSON 对象"}, status_code=400)
+        text = payload.get("text")
+        if not isinstance(text, str):
+            return JSONResponse({"ok": False, "code": "bad_request", "message": "text 必须是字符串"}, status_code=400)
+        cleaned = " ".join(text.split()).strip()
+        if not cleaned:
+            return JSONResponse({"ok": False, "code": "bad_request", "message": "这句话是空的"}, status_code=400)
+        if len(cleaned) > MAX_VOICE_CHARS:
+            return JSONResponse(
+                {"ok": False, "code": "bad_request", "message": f"一次最多 {MAX_VOICE_CHARS} 个字"},
+                status_code=400,
+            )
+        sentence = payload.get("sentence")
+        if sentence is not None and (isinstance(sentence, bool) or not isinstance(sentence, int)):
+            return JSONResponse({"ok": False, "code": "bad_request", "message": "sentence 必须是整数"}, status_code=400)
+        if isinstance(sentence, int) and sentence < 0:
+            return JSONResponse({"ok": False, "code": "bad_request", "message": "sentence 不能是负数"}, status_code=400)
+
+        synth = getattr(runner, "handle_voice", None)
+        if synth is None:
+            return JSONResponse({"ok": False, "code": "bridge_down", "message": "语音后端未接入"}, status_code=503)
+        try:
+            voice = await asyncio.wait_for(synth(cleaned, sentence), timeout=VOICE_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            return JSONResponse({"ok": False, "code": "bridge_down", "message": "语音合成超时"}, status_code=503)
+        except TtsUnavailable as exc:
+            return JSONResponse({"ok": False, "code": "bridge_down", "message": str(exc)}, status_code=503)
+        except IndexError:
+            return JSONResponse({"ok": False, "code": "bad_request", "message": "句子下标越界"}, status_code=400)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "code": "bad_request", "message": str(exc) or "台词不合法"}, status_code=400)
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "code": "bridge_down", "message": str(exc)}, status_code=503)
+        if not isinstance(voice, dict):
+            return JSONResponse({"ok": False, "code": "bridge_down", "message": "语音后端没有返回音频"}, status_code=503)
+        return JSONResponse({"ok": True, "voice": voice})
+
+    @app.get("/mas3d/api/voice/{voice_id}.wav")
+    async def voice_audio(voice_id: str, _: None = Depends(require_token)) -> FileResponse:
+        """读取合成好的 WAV。voice_id 只接受 32 位小写十六进制（tts.wav_path 已校验）。"""
+        resolver = getattr(runner, "voice_path", None)
+        path = resolver(voice_id) if callable(resolver) else None
+        if path is None or not Path(path).is_file():
+            raise HTTPException(status_code=404, detail="没有这段语音")
+        return FileResponse(path, media_type="audio/wav")
 
     @app.websocket("/mas3d/ws")
     async def conversation(websocket: WebSocket) -> None:
@@ -354,6 +419,7 @@ __all__ = [
     "PLAN_TIMEOUT_S",
     "RATE_LIMIT_TURNS",
     "RATE_LIMIT_WINDOW_S",
+    "VOICE_TIMEOUT_S",
     "TurnSession",
     "bearer_token",
     "create_app",

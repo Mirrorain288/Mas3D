@@ -19,6 +19,7 @@ from .adapter import QueueTurnBridge, TurnBridge, run_turn
 from .hastsec import HastSecClient
 from .session import DEFAULT_UMO, resolve_umo
 from .token import load_token, token_path
+from .tts import TtsClient
 from .web_api import LocalServer, create_app
 
 PLUGIN_NAME = "astrbot_plugin_mas3d_game"
@@ -78,6 +79,7 @@ class Mas3dGamePlugin(Star):
         self.token: str | None = None
         self.server: LocalServer | None = None
         self.hast: HastSecClient | None = None
+        self.tts: TtsClient | None = None
 
     async def initialize(self) -> None:
         self.bridge = self._build_bridge()
@@ -88,6 +90,7 @@ class Mas3dGamePlugin(Star):
                 __version__,
             )
         self.hast = HastSecClient(session_path=DATA_DIR / "mas3d" / "session.json")
+        self.tts = TtsClient(DATA_DIR / "mas3d" / "cache" / "tts")
         error = getattr(self.bridge, "last_error", None)
         if error:
             logger.warning("mas3d_game 桥接初始化有问题：%s", error)
@@ -146,6 +149,18 @@ class Mas3dGamePlugin(Star):
         if self.hast is None:
             raise RuntimeError("动作后端未初始化")
         return await self.hast.plan(text, context or ())
+
+    async def handle_voice(self, text: str, sentence: int | None = None) -> dict[str, Any]:
+        """供语音端点调用：把一句（或整轮）台词合成成 WAV 并给出逐句时间线。"""
+        if self.tts is None:
+            raise RuntimeError("语音后端未初始化")
+        return await self.tts.synthesize(text, sentence)
+
+    def voice_path(self, voice_id: str) -> Path | None:
+        """把 voice_id 映射到缓存里的 WAV 路径；不合法或不存在都返回 None。"""
+        if self.tts is None:
+            return None
+        return self.tts.wav_path(voice_id)
 
 
 __all__ = [

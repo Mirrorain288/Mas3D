@@ -58,6 +58,37 @@ curl.exe http://127.0.0.1:8769/v13-api/status
 
 不启动 HAST-SEC 时游戏照常运行：动作后端返回 `bridge_down`，角色只用 Tier 0 待机与 Tier 1 预制手势。
 
+## 语音（本地 GPT-SoVITS，默认开启）
+
+游戏里的台词用本机 GPT-SoVITS 合成：字幕保持中文，送给音色的是英译文本（这个音色是纯英文训练的）。
+
+启动（工作目录必须是 GPT-SoVITS 根）：
+
+```powershell
+cd D:\GPT-SoVITS-v2pro-20250604
+.\runtime\python.exe api_v2.py -a 127.0.0.1 -p 9880 -c GPT_SoVITS/configs/tts_infer.yaml
+# 5–6 秒后监听 127.0.0.1:9880
+```
+
+确认：
+
+```powershell
+curl.exe -s -X POST http://127.0.0.1:9880/tts -H "Content-Type: application/json" `
+  -d '{"text":"Hello.","text_lang":"en","ref_audio_path":"REF.wav","prompt_lang":"en","prompt_text":"..."}'
+```
+
+桥接侧的约定：
+
+- `POST /mas3d/api/voice/synth`（body `{text, sentence?}`）→ `{id, audioUrl, durationMs, sentenceStartsMs, englishText}`；音频用 `GET /mas3d/api/voice/<id>.wav` 取。
+- **每次合成前显式锁权重**（`/set_gpt_weights` 再 `/set_sovits_weights`，见 `apps/bridge/tts.py` 的 `GPT_WEIGHTS`/`SOVITS_WEIGHTS`）。本机 `tts_infer.yaml`、`weight.json`、`api-start.bat` 三处写的权重互不一致，不锁就会出现「声音换人」。
+- 参数固定：`text_lang=en`、`prompt_lang=en`、`top_k=10`、`top_p=1`、`temperature=1`、`cut5`、`repetition_penalty=1.35`、`speed_factor=1.0`、`streaming_mode=false`、`media_type=wav`、`parallel_infer=false`（把显存留给 QQ 侧的 AstrBot）。
+- 中→英翻译读 AstrBot 的 `~/.astrbot/data/gsv_tts_translate.json`（沿用同一 api_key，不复制进仓库）。该代理偶尔会丢掉 system 提示词、把翻译当聊天回答，所以指令同时写进 user 消息、最多重试 3 次，并用「含中文/助手口吻/长度超限」三条规则判定失败。
+- 翻译失败时**不合成**：返回 503，前端只显示中文字幕（英文音色硬读中文只会得到含糊音节）。
+- 缓存：`<plugin_data>/mas3d/cache/tts/<sha256(text|weights|params)>.wav` 与同名 `.en` 译文，LRU 500 按 mtime 清理；同一句第二次请求 0 次 HTTP。
+- 单句 30 秒、整轮 60 秒超时；单并发（`Semaphore(1)`）。
+
+没启动 GPT-SoVITS 时游戏照常运行：`/voice/synth` 返回 503，回合只显示字幕。
+
 ## 测试
 
 ```powershell

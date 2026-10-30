@@ -371,3 +371,142 @@ def test_ws_intent_failure_is_silent(plugin, web_api, make_client):
         assert socket.receive_json()["type"] == "reply"
         socket.send_json({"type": "say", "text": "还在吗"})
         assert socket.receive_json()["type"] == "ack"
+
+
+VOICE_ID = "a" * 32
+VOICE = {
+    "id": VOICE_ID,
+    "durationMs": 1200,
+    "sentenceStartsMs": [0, 600],
+    "englishText": "Hello. Bye.",
+    "audioUrl": f"/mas3d/api/voice/{VOICE_ID}.wav",
+    "cached": False,
+}
+
+
+class VoiceRunner(StubRunner):
+    """带语音后端的 runner；voice 与缓存目录都可注入。"""
+
+    def __init__(self, voice: dict | None = None, *, error: Exception | None = None, wav: bool = True, **kwargs):
+        super().__init__(**kwargs)
+        self.voice = voice if voice is not None else dict(VOICE)
+        self.voice_error = error
+        self.voice_calls: list[tuple[str, int | None]] = []
+        self.wav = wav
+
+    async def handle_voice(self, text: str, sentence: int | None = None) -> dict:
+        self.voice_calls.append((text, sentence))
+        if self.voice_error is not None:
+            raise self.voice_error
+        return self.voice
+
+    def voice_path(self, voice_id: str):
+        if not self.wav or voice_id != VOICE_ID:
+            return None
+        path = self._wav_dir / f"{voice_id}.wav"
+        return path if path.is_file() else None
+
+    _wav_dir = None
+
+
+def _voice_client(web_api, make_client, runner: VoiceRunner, tmp_path):
+    runner._wav_dir = tmp_path
+    if runner.wav:
+        (tmp_path / f"{VOICE_ID}.wav").write_bytes(b"RIFF....WAVEfmt ")
+    return make_client(runner)
+
+
+def test_voice_synth_without_token_401(web_api, make_client, tmp_path):
+    runner = VoiceRunner()
+    client = _voice_client(web_api, make_client, runner, tmp_path)
+    assert client.post("/mas3d/api/voice/synth", json={"text": "你好"}).status_code == 401
+
+
+def test_voice_synth_503_without_backend(web_api, make_client):
+    client = make_client(StubRunner())
+    response = client.post(
+        "/mas3d/api/voice/synth", json={"text": "你好"}, headers={"Authorization": f"Bearer {TOKEN}"}
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "bridge_down"
+
+
+def test_voice_synth_returns_voice(web_api, make_client, tmp_path):
+    runner = VoiceRunner()
+    client = _voice_client(web_api, make_client, runner, tmp_path)
+    response = client.post(
+        "/mas3d/api/voice/synth",
+        json={"text": "  你好。再见。  ", "sentence": 1},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "voice": VOICE}
+    assert runner.voice_calls == [("你好。再见。", 1)]
+
+
+def test_voice_synth_rejects_blank_text(web_api, make_client, tmp_path):
+    runner = VoiceRunner()
+    client = _voice_client(web_api, make_client, runner, tmp_path)
+    response = client.post(
+        "/mas3d/api/voice/synth", json={"text": "   "}, headers={"Authorization": f"Bearer {TOKEN}"}
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "bad_request"
+    assert runner.voice_calls == []
+
+
+def test_voice_synth_rejects_bad_sentence(web_api, make_client, tmp_path):
+    runner = VoiceRunner()
+    client = _voice_client(web_api, make_client, runner, tmp_path)
+    for bad in ("1", -1, True):
+        response = client.post(
+            "/mas3d/api/voice/synth",
+            json={"text": "你好", "sentence": bad},
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+        assert response.status_code == 400, bad
+    assert runner.voice_calls == []
+
+
+def test_voice_synth_maps_unavailable_503(plugin, web_api, make_client, tmp_path):
+    tts = importlib.import_module("astrbot_plugin_mas3d_game.tts")
+    runner = VoiceRunner(error=tts.TtsUnavailable("GPT-SoVITS 连不上"))
+    client = _voice_client(web_api, make_client, runner, tmp_path)
+    response = client.post(
+        "/mas3d/api/voice/synth", json={"text": "你好"}, headers={"Authorization": f"Bearer {TOKEN}"}
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "bridge_down"
+
+
+def test_voice_synth_maps_index_error_400(web_api, make_client, tmp_path):
+    runner = VoiceRunner(error=IndexError("list index out of range"))
+    client = _voice_client(web_api, make_client, runner, tmp_path)
+    response = client.post(
+        "/mas3d/api/voice/synth",
+        json={"text": "你好", "sentence": 8},
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "bad_request"
+
+
+def test_voice_audio_serves_wav(web_api, make_client, tmp_path):
+    runner = VoiceRunner()
+    client = _voice_client(web_api, make_client, runner, tmp_path)
+    response = client.get(
+        f"/mas3d/api/voice/{VOICE_ID}.wav?token={TOKEN}", headers={"Authorization": f"Bearer {TOKEN}"}
+    )
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "audio/wav"
+    assert response.content.startswith(b"RIFF")
+
+
+def test_voice_audio_missing_404(web_api, make_client, tmp_path):
+    runner = VoiceRunner(wav=False)
+    client = _voice_client(web_api, make_client, runner, tmp_path)
+    for voice_id in ("0" * 32, VOICE_ID):
+        response = client.get(
+            f"/mas3d/api/voice/{voice_id}.wav", headers={"Authorization": f"Bearer {TOKEN}"}
+        )
+        assert response.status_code == 404

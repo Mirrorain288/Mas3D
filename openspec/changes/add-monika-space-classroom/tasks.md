@@ -74,17 +74,17 @@ Design decisions referenced as D1–D14 are in `design.md`; requirements in `spe
 
 ## 9. 语音与口型（D15–D19）
 
-- [ ] 9.1 实现 `tools/extract-face-map.mjs`：解析 VRM 的 `meshes[*].primitives[*].extras.targetNames` 与 `blendShapeMaster`，输出 `face.map.json`（名称→索引 + 语义组合表），验证 57 个名称全部落表、索引 13/14/15 分别为 `Fcl_EYE_Close`/`_R`/`_L`、索引 39–43 为 `Fcl_MTH_A/I/U/E/O`
-- [ ] 9.2 实现表情组合表（neutral/joy/fun/sorrow/angry/surprised/blink/wink）：按 VRoid 分项叠加并 clamp 总和 ≤ 1，验证单元测试覆盖每个组合的权重和与切换时长
-- [ ] 9.3 实现 `TtsClient`：先 `/set_gpt_weights` 与 `/set_sovits_weights` 锁权重，再 POST `127.0.0.1:9880/tts`（参数见 D16），验证返回 WAV 为 32 kHz 单声道 16-bit，且日志记录生效权重文件名与耗时
-- [ ] 9.4 实现中文→英文转换：读 `~/.astrbot/data/gsv_tts_translate.json` 的 `api_base`/`model`/`temperature`，失败回退原文，验证翻译端点返回 500 时仍能合成出音频
-- [ ] 9.5 实现逐句切分与流水线：按标点切句、合成第 N+1 句时播放第 N 句、单句 30 秒与整轮 60 秒超时、单并发队列深度 ≤ 2，验证两句回复播放不重叠且句间无空档
-- [ ] 9.6 实现音频缓存 `<plugin_data>/mas3d/cache/tts/<sha256(text|weights|params)>.wav`（LRU 500），验证同一句第二次请求不产生 HTTP 调用
+- [x] 9.1 实现 `tools/extract-face-map.mjs`：解析 VRM 的 `meshes[*].primitives[*].extras.targetNames` 与 `blendShapeMaster`，输出 `face.map.json`（名称→索引 + 语义组合表），验证 57 个名称全部落表、索引 13/14/15 分别为 `Fcl_EYE_Close`/`_R`/`_L`、索引 39–43 为 `Fcl_MTH_A/I/U/E/O`
+- [x] 9.2 实现表情组合表（neutral/joy/fun/sorrow/angry/surprised/blink/wink）：按 VRoid 分项叠加并 clamp 总和 ≤ 1，验证单元测试覆盖每个组合的权重和与切换时长
+- [x] 9.3 实现 `TtsClient`：先 `/set_gpt_weights` 与 `/set_sovits_weights` 锁权重，再 POST `127.0.0.1:9880/tts`（参数见 D16），验证返回 WAV 为 32 kHz 单声道 16-bit，且日志记录生效权重文件名与耗时
+- [x] 9.4 实现中文→英文转换：读 `~/.astrbot/data/gsv_tts_translate.json` 的 `api_base`/`model`/`temperature`，失败回退原文，验证翻译端点返回 500 时仍能合成出音频
+- [ ] 9.5 实现逐句切分与流水线（服务端切句 + 单句 30s/整轮 60s 超时已随 9.3 落地，前端「播第 N 句时合成第 N+1 句」随 9.7–9.10 完成）：按标点切句、合成第 N+1 句时播放第 N 句、单句 30 秒与整轮 60 秒超时、单并发队列深度 ≤ 2，验证两句回复播放不重叠且句间无空档
+- [x] 9.6 实现音频缓存 `<plugin_data>/mas3d/cache/tts/<sha256(text|weights|params)>.wav`（LRU 500），验证同一句第二次请求不产生 HTTP 调用
 - [ ] 9.7 实现口型 L0：WebAudio `AnalyserNode` 包络 → `Fcl_MTH_A`（门限 + 非对称平滑）与少量 `Fcl_MTH_Down`，验证静音段权重归零、有声段单调跟随能量
 - [ ] 9.8 实现口型 L1/L2：句间归零 + 英文 grapheme→viseme 规则表（a/ɑ→A、i/ɪ/y→I、u/ʊ/w→U、e/ɛ→E、o/ɔ→O、闭唇与停顿→0.15），验证 20 个示例词的 viseme 序列符合预期
 - [ ] 9.9 实现嘴部通道抑制：语音播放期间 `Fcl_MTH_*` 的表情写入压到 0.25、结束后 200 毫秒恢复到当前情绪，验证单元测试断言「说话中触发喜悦」的嘴部权重不超过阈值、结束后回到期望值
 - [ ] 9.10 实现「仅字幕」开关与语音降级：TTS 未启动时静音并给出一次非阻断提示、冷却后自动重试，验证杀掉 9880 进程后回合仍完成、无异常堆栈
-- [ ] 9.11 在 `README.md` 记录 GPT-SoVITS 启动命令与「权重显式锁定」要求，验证文档命令与 `api-start.bat` 一致且能返回 status
+- [x] 9.11 在 `README.md` 记录 GPT-SoVITS 启动命令与「权重显式锁定」要求，验证文档命令与 `api-start.bat` 一致且能返回 status
 
 ## 10. 集成与验收
 
