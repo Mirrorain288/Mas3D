@@ -76,3 +76,39 @@ Remove-Item Env:\VITE_VRM_URL                    # 清掉就回到默认模型
 **已知坑：带真实 binds 的 VRM 会把表情清零**。有的模型在 `VRM.blendShapeGroups` 里带 bind（`{index, mesh, weight}`），three-vrm 的表情管理器每帧 `update()` 时把自己的权重（默认 0）写回同一批 `Fcl_*` 形变，把 `FaceDriver` 的直写覆盖掉——症状是表情/口型「先亮一下，约 1 秒后归零」。加载时用 `detachExpressions()` 注销管理器里的表达式，让 `FaceDriver` 成为唯一写入者（`apps/web/src/avatar/vrmExpressions.ts`）。入库的 `Monika.vrm` 恰好 binds 全空，所以这个坑只有换模型才会遇到。
 
 坐姿是「hips 贴座面 + 膝盖按脚掌厚度补偿」：`applySitPose` / `placeSeated` 先把 hips 对齐由场景量出的座面高度，随后用模型自己量出的脚掌厚度（站立脚踝高度 − 站立包围盒最低点）求解小腿要多弯多少，把脚放回地面（`apps/web/src/avatar/seatFit.ts`，收敛到 2 mm 内）。标定姿态原本就是埋着的——两副模型分别埋 6.1 cm 与 10.0 cm，只是课桌挡住看不见——所以目标高度不能写死，必须按模型量；换模型后 `stats().seatFit` 会给出实测的 `clearanceM` 与 `kneeDelta`。整体升降会让角色浮在座面上、按身高缩放会动到手位置与相机，都不采用。命中盒与相机仍按标定体型定。
+
+## 换房间（自备卧室场景）
+
+默认仍是程序化教室。如果本机放了 `apps/web/public/assets/room/mita-room.glb`，启动时会自动改用它（加载失败则静默退回教室）；也可以显式指定：
+
+```powershell
+$env:VITE_ROOM_GLB = "/assets/room/mita-room.glb"   # 指定房间
+$env:VITE_ROOM_GLB = "none"                         # 强制程序化教室（冒烟脚本用这个拿基线）
+Remove-Item Env:\VITE_ROOM_GLB
+```
+
+房间素材**不入库**：来源是别人的游戏资产（NinjaRipper 抓取），只在本机使用、不随仓库或发布分发。生成步骤：
+
+```powershell
+# 1. 从 .blend 只导出房间（隐藏角色本体与墙外的天空平面，贴图缩到 1024、WebP 80）
+& 'D:\tools\blender-4.5.15-windows-x64\blender.exe' -b '素材\mita\无标题.blend' `
+  -P tools/blender/export-room.py -- apps/web/public/assets/room/mita-room.glb `
+  --hide Mesh_0167out Mesh_0094out Mesh_0074out Mesh_0073out Mesh_0341out 平面
+
+# 2. 认不出网格是哪个家具时，单独渲染它看一眼（Ripper 的网格名与家具无关）
+& blender.exe -b '素材\mita\无标题.blend' -P tools/blender/inspect-parts.py -- .superpowers\apart Mesh_0025out Mesh_0146out
+```
+
+导出后由 `apps/web/src/scene/roomDressing.ts` 收尾，三件事都是**代码里做的、不改 GLB**：
+
+1. **补材质**：屋顶（`Mesh_0116out`）换成 Poly Haven 的吊顶 PBR、三处丢贴图的白模（抽屉柜 / 立式镜 / 四格架）分别给乳胶漆与玻璃质感，其余保持原贴图。
+2. **补光**：房间自带月光与台灯之外，加一盏吸顶暖光与半球补光；同时把全局三盏压到 0.25/0.2/0（`lightProfile`），否则会双重打光。
+3. **补家具**：右墙原本只有一扇门，转身是一大片空墙——把房间自带的书桌与桌上的显示器/主机整组复制一份摆过去（`decorPlacements()`）。必须**整组复制**：Ripper 是按 draw call 切网格的，`Mesh_0025out` 其实是「显示器 + 主机 + 支架」，单独复制会给出一堆散件。
+
+还有一条不依赖素材的后备路线：`$env:VITE_ROOM = "bedroom"` 换成程序化卧室（5.0×4.6×2.5 m 直墙房间，地板/墙/吊顶都是 PBR，床、衣柜、书桌、地毯自建，60 网格 / 1,448 三角面）。房间 GLB 若因许可或体积不能带，用它仍能拿到「方地板 + 方墙 + 卧室尺度」，只是贴图是通用材质而不是手绘。
+
+调试开关：`VITE_ROOM_DECOR=none` 不摆复制家具，`VITE_ROOM_DECOR=tag` 给每件复制品上纯色（截图里直接看出哪坨是哪个副本）。
+
+座位是给这一间房标定的：`IMPORTED_ROOM_LAYOUT`（`apps/web/src/scene/classroom.ts`）记录座位在房间原始坐标里的位置与整间房的朝向；换房间要重新量，再用 `e2e/room-map.mjs`（打印所有网格的世界包围盒）确认家具相对位置。四机位对照：`node e2e/room-angles.mjs --room /assets/room/mita-room.glb --dir <输出目录>`。
+
+**已知差距**：立式镜没有 envMap，读作深色玻璃（真镜面要每帧多渲一遍 cube camera，本机不划算）；屋顶是斜顶，屋檐内侧在极端机位仍会露一条本色。

@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { createRoomLights, dressImportedRoom, furnishImportedRoom } from "./roomDressing";
 
 /**
  * 教室道具全部取自 Styloo 教室素材包，按「原生尺寸」摆放（GLB 已是真实米制，
@@ -13,6 +14,34 @@ export const CLASSROOM_ASSETS = {
 } as const;
 
 export type ClassroomKey = keyof typeof CLASSROOM_ASSETS;
+
+/**
+ * 房间 GLB 的地址。优先级：VITE_ROOM_GLB（显式指定）> 默认路径探一下。
+ * 默认路径上的文件不进仓库（那是别人的游戏素材，只在本机用），所以本地没有时会
+ * 静默退回程序化教室——仓库里跑起来永远是能玩的状态。
+ */
+const IMPORTED_ROOM_URL =
+  (import.meta.env as unknown as Record<string, string | undefined>).VITE_ROOM_GLB ?? "";
+/** 本机自备卧室的房间文件；存在就用它，不存在就当没这回事。 */
+const DEFAULT_IMPORTED_ROOM = "/assets/room/mita-room.glb";
+/** VITE_ROOM_GLB=none 强制走程序化教室（冒烟脚本靠它拿一个确定的基线）。 */
+const FORCE_PROCEDURAL = IMPORTED_ROOM_URL === "none";
+/** 另一个试跑开关：VITE_ROOM=bedroom 换成程序化的 B 方案卧室。 */
+const TRIAL_ROOM =
+  (import.meta.env as unknown as Record<string, string | undefined>).VITE_ROOM ?? "";
+
+interface ImportedRoomLayout {
+  /** 座位在房间原始坐标里的位置（three 坐标；x/z 为平面位置，y 为该处 hips 的高度） */
+  seatRaw: THREE.Vector3;
+  /** 整个房间绕 Y 轴的旋转，让座位朝向世界 +z（相机默认就在 +z 一侧） */
+  yaw: number;
+}
+
+/** 与 .superpowers/mita-export2.py 导出的米塔卧室对齐：坐在床沿，背后是窗与床头板。 */
+const IMPORTED_ROOM_LAYOUT: ImportedRoomLayout = {
+  seatRaw: new THREE.Vector3(1.72, 0.257, 0.65),
+  yaw: -Math.PI / 2,
+};
 
 /** 坐面到 hips 骨骼的距离（米）：长凳坐面 + 这一点高度就是角色髋部该在的位置。 */
 const HIP_ABOVE_SEAT = 0.14;
@@ -35,6 +64,11 @@ export interface ClassroomBuild {
   degraded: ClassroomKey[];
   /** Monika 的座位锚点（世界坐标，y 为 hips 该在的高度） */
   seat: { position: THREE.Vector3; facingY: number };
+  /**
+   * 场景级灯光画像：导入的房间自带月光与台灯，全局那三盏要按这里压下去，
+   * 否则冷色轮廓光会把卧室重新照成太空舱。不填表示保持 createLights() 原样。
+   */
+  lightProfile?: { key: number; fill: number; rim: number };
   setShadows(enabled: boolean): void;
   dispose(): void;
 }
@@ -283,12 +317,113 @@ function buildShell(): { group: THREE.Group; disposables: Array<THREE.BufferGeom
 }
 
 /**
+ * 试跑用：把一整间导入的房间当场景。地板对齐 y=0，座位平移到原点，
+ * 整间房绕 Y 旋转到座位朝向相机；墙面双向渲染（导入的墙体多是单面盒子）。
+ */
+async function buildImportedRoom(
+  loader: GLTFLoader,
+  url: string,
+  onProgress?: (ratio: number) => void,
+): Promise<ClassroomBuild> {
+  const gltf = await loader.loadAsync(url, (event) => {
+    if (event.total > 0) onProgress?.(event.loaded / event.total);
+  });
+  const root = new THREE.Group();
+  root.name = "imported-room";
+  const room = gltf.scene;
+  const box = new THREE.Box3().setFromObject(room);
+  const seat = IMPORTED_ROOM_LAYOUT.seatRaw
+    .clone()
+    .applyMatrix4(new THREE.Matrix4().makeRotationY(IMPORTED_ROOM_LAYOUT.yaw));
+  room.rotation.y = IMPORTED_ROOM_LAYOUT.yaw;
+  room.position.set(-seat.x, -box.min.y, -seat.z);
+  root.add(room);
+
+  room.traverse((child) => {
+    const mesh = child as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    mesh.receiveShadow = true;
+    const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const material of materials) {
+      if (material) material.side = THREE.DoubleSide;
+    }
+  });
+  const dressing = await dressImportedRoom(room);
+  const lights = createRoomLights();
+  room.add(lights.root);
+  // 家具复制品按世界坐标摆，所以挂在 root 而不是 room 下面（room 自带旋转与位移）
+  const decor = furnishImportedRoom(room);
+  root.add(decor.root);
+  onProgress?.(1);
+
+  return {
+    root,
+    degraded: [],
+    seat: {
+      position: new THREE.Vector3(0, IMPORTED_ROOM_LAYOUT.seatRaw.y - box.min.y, 0),
+      facingY: 0,
+    },
+    lightProfile: { key: 0.25, fill: 0.2, rim: 0 },
+    setShadows(enabled: boolean): void {
+      root.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (mesh.isMesh) mesh.castShadow = enabled;
+      });
+      lights.setShadows(enabled);
+    },
+    dispose(): void {
+      lights.dispose();
+      dressing.dispose();
+      room.traverse((child) => {
+        const mesh = child as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        mesh.geometry.dispose();
+        const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+        for (const material of materials) {
+          if (!material) continue;
+          (material as THREE.MeshStandardMaterial).map?.dispose();
+          material.dispose();
+        }
+      });
+      root.clear();
+    },
+  };
+}
+
+/**
  * 装配单个座位区：课桌椅、黑板、讲台、吊灯 + 地板与舱壁。
  * 任何一个 GLB 加载失败都只影响自己的槽位（占位方块 + degraded 记录），
  * 不会让整个场景白屏。
  */
 export async function buildClassroom(
   loader: GLTFLoader = new GLTFLoader(),
+  onProgress?: (ratio: number) => void,
+): Promise<ClassroomBuild> {
+  if (TRIAL_ROOM === "bedroom") {
+    const { buildBedroom } = await import("./bedroom");
+    return buildBedroom(onProgress);
+  }
+  if (FORCE_PROCEDURAL) {
+    return buildProceduralClassroom(loader, onProgress);
+  }
+  // 显式指定的房间失败要吵（配置写错了），探路发现的默认房间失败要静（本机没放素材）
+  const explicitRoom = IMPORTED_ROOM_URL.length > 0;
+  const roomUrl = explicitRoom ? IMPORTED_ROOM_URL : DEFAULT_IMPORTED_ROOM;
+  try {
+    return await buildImportedRoom(loader, roomUrl, onProgress);
+  } catch (error) {
+    if (explicitRoom) console.error("[mas3d] 导入房间失败，退回程序化教室", error);
+  }
+
+  return buildProceduralClassroom(loader, onProgress);
+}
+
+/**
+ * 原教室：程序化舱壁 + 四件 GLB 道具。
+ * 保留成独立函数，房间探路失败时要能直接掉进来。
+ */
+async function buildProceduralClassroom(
+  loader: GLTFLoader,
   onProgress?: (ratio: number) => void,
 ): Promise<ClassroomBuild> {
   const root = new THREE.Group();

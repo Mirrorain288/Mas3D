@@ -3,6 +3,8 @@ import * as THREE from "three";
 export interface SceneLights {
   root: THREE.Group;
   key: THREE.DirectionalLight;
+  fill: THREE.HemisphereLight;
+  rim: THREE.PointLight;
   setShadows(enabled: boolean): void;
   dispose(): void;
 }
@@ -44,6 +46,8 @@ export function createLights(): SceneLights {
   return {
     root,
     key,
+    fill,
+    rim,
     setShadows(enabled: boolean): void {
       key.castShadow = enabled;
     },

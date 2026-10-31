@@ -63,6 +63,9 @@ const server = await vite.createServer({
     "import.meta.env.VITE_MAS3D_WS": JSON.stringify("ws://localhost:" + BRIDGE_PORT + "/mas3d/ws"),
     // 换模验证：VITE_VRM_URL=/assets/monika/Other.vrm node e2e/smoke.mjs
     "import.meta.env.VITE_VRM_URL": JSON.stringify(process.env.VITE_VRM_URL ?? ""),
+    // 冒烟测的是产品默认路径的基线：钉死程序化教室，别被本机放着的房间 GLB 改掉
+    "import.meta.env.VITE_ROOM_GLB": JSON.stringify("none"),
+    "import.meta.env.VITE_ROOM": JSON.stringify(""),
   },
   logLevel: "silent",
 });

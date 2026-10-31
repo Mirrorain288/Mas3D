@@ -181,6 +181,11 @@ export function Scene({ onReady, onCredit }: SceneProps) {
         }
         scene.add(classroom.root);
         classroom.setShadows(qualitySettings(quality).shadows);
+        if (classroom.lightProfile && lights) {
+          lights.key.intensity = classroom.lightProfile.key;
+          lights.fill.intensity = classroom.lightProfile.fill;
+          lights.rim.intensity = classroom.lightProfile.rim;
+        }
         setDegraded(classroom.degraded);
         setSeat({ position: classroom.seat.position.clone(), facingY: classroom.seat.facingY });
         if (import.meta.env.DEV) {
