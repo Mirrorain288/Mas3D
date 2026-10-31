@@ -298,6 +298,9 @@ export function useBridge(url: string, token: string | null | undefined, handler
   );
 
   const retry = useCallback((): void => {
+    // 连点「重试」或点击时上一回合还没结束：再发一次就是两个真回合（两次模型调用、
+    // 两次写入 QQ 历史），而先到的那条回复会因为 pendingTurn 被覆盖而丢掉
+    if (BUSY.includes(stateRef.current.phase)) return;
     const lastPlayer = [...stateRef.current.turns].reverse().find((turn) => turn.role === "player");
     if (!lastPlayer) return;
     dispatch({ type: "resend" });
@@ -315,9 +318,14 @@ export function useBridge(url: string, token: string | null | undefined, handler
   }, [armReplyTimer, connect, fail]);
 
   const reset = useCallback((): void => {
+    // 清空之后仍在等的那一回合要一起作废：否则它的回复、或者 150 秒后的超时提示，
+    // 会落在空白对话里，看起来像她凭空插话
+    clearReplyTimer();
+    pendingTurn.current = null;
+    lastTurn.current = null;
     dispatch({ type: "reset" });
     clearTurns();
-  }, []);
+  }, [clearReplyTimer]);
 
   return { phase: state.phase, turns: state.turns, error: state.error, connected, offline, send, retry, reset, reconnect };
 }
