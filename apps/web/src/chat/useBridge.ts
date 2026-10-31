@@ -44,6 +44,15 @@ export interface BridgeApi {
 }
 
 let counter = 0;
+/** DEV 下把「动作计划被应用/被丢弃」两件事记在 window 上，供 e2e 断言。 */
+function countIntent(applied: boolean): void {
+  if (!import.meta.env.DEV) return;
+  const scope = window as unknown as { __mas3dIntent?: { applied: number; dropped: number } };
+  const counter = (scope.__mas3dIntent ??= { applied: 0, dropped: 0 });
+  if (applied) counter.applied += 1;
+  else counter.dropped += 1;
+}
+
 function nextId(prefix: string): string {
   counter += 1;
   return prefix + "-" + Date.now().toString(36) + "-" + counter;
@@ -67,6 +76,8 @@ export function useBridge(url: string, token: string | null | undefined, handler
   const replyTimer = useRef<number | null>(null);
   /** 当前在等哪一回合（来自 ack/thinking 帧），回复必须对上号才算数。 */
   const pendingTurn = useRef<string | null>(null);
+  // 最近一条已经认领的回合：迟到的 intent 帧要按它对号入座（见 D21/风险 3）
+  const lastTurn = useRef<string | null>(null);
   const offlineTimer = useRef<number | null>(null);
   const fallbackIndex = useRef(0);
   const closedByUs = useRef(false);
@@ -200,11 +211,22 @@ export function useBridge(url: string, token: string | null | undefined, handler
           clearReplyTimer();
           // 回合 id 现在与玩家那一句的 id 相同（turnId 就是它），消息条目要分命名空间，
           // 否则两条 Turn 撞 React key，列表会吞掉或重复渲染
+          lastTurn.current = frame.turnId;
           dispatch({ type: "reply", id: "m-" + frame.turnId, text: frame.text, at: Date.now() });
           // 桥接侧可以不带 cue：缺省时用前端同一份词表推导，保持单一推导源
           handlersRef.current.onCue?.(frame.cue ?? deriveCue(frame.text));
           break;
         case "intent": {
+          // 动作计划是回复之后才问 HAST-SEC 的，可能晚于下一条消息到达：
+          // 只认「刚回复过的那一回合」或「正在等的回合」，否则玩家刚说完新话，
+          // 上一回合的手臂动作会突然抬起来（风险 3）
+          // 已经有新问题在等回复时，上一回合的迟到计划一律丢（pending 非空即失效）
+          const pending = pendingTurn.current;
+          const accepted =
+            frame.turnId !== "" &&
+            (pending === null ? frame.turnId === lastTurn.current : frame.turnId === pending);
+          countIntent(accepted);
+          if (!accepted) break;
           const plan = frame.plan;
           handlersRef.current.onPlan?.(plan);
           if (plan.reply) {

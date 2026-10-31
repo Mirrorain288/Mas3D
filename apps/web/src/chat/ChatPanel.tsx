@@ -3,6 +3,15 @@ import { MAX_INPUT_CHARS } from "@mas3d/protocol";
 import type { ExpressionCue, MotionPlan } from "@mas3d/protocol";
 import { loadSettings, normalizeSettings, saveSettings, type Settings } from "../settings";
 import type { SceneApi } from "../scene/Scene";
+import {
+  SESSION_LABEL,
+  SESSION_NOTE,
+  fetchSession,
+  sessionHint,
+  switchSession,
+  type SessionInfo,
+  type SessionMode,
+} from "./session";
 import { MAX_TURNS, type Turn } from "./store";
 import { useBridge } from "./useBridge";
 import { useVoice } from "./voice";
@@ -63,6 +72,8 @@ export function ChatPanel({ api }: ChatPanelProps) {
   const [showSettings, setShowSettings] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [session, setSession] = useState<SessionInfo | null>(null);
+  const [sessionBusy, setSessionBusy] = useState(false);
 
   const logRef = useRef<HTMLDivElement | null>(null);
   const apiRef = useRef<SceneApi | null>(api);
@@ -119,6 +130,43 @@ export function ChatPanel({ api }: ChatPanelProps) {
     spokenRef.current = last.id;
     voice.speak(last.text);
   }, [bridge.turns, bridge.phase, voice]);
+
+  // 会话来源与「往 QQ 那份记录写了多少句」：进入页面取一次，每回合结束后再取一次
+  const refreshSession = useCallback((): void => {
+    void fetchSession(VOICE_BASE, token).then((info) => {
+      if (info) setSession(info);
+    });
+  }, [token]);
+
+  useEffect(() => {
+    refreshSession();
+  }, [refreshSession]);
+
+  useEffect(() => {
+    if (bridge.phase === "idle" && bridge.turns.length > 0) refreshSession();
+  }, [bridge.phase, bridge.turns.length, refreshSession]);
+
+  useEffect(() => {
+    document.body.dataset.session = session?.mode ?? "unknown";
+  }, [session]);
+
+  const changeSession = useCallback(
+    (mode: SessionMode): void => {
+      if (sessionBusy || session?.mode === mode) return;
+      setSessionBusy(true);
+      void switchSession(VOICE_BASE, token, mode)
+        .then((info) => {
+          if (!info) {
+            setNotice("会话来源切换失败：桥接没有响应，仍然沿用当前会话。");
+            return;
+          }
+          setSession(info);
+          setNotice(mode === "dedicated" ? SESSION_NOTE.dedicated : SESSION_NOTE.shared);
+        })
+        .finally(() => setSessionBusy(false));
+    },
+    [session?.mode, sessionBusy, token],
+  );
 
   useEffect(() => {
     api?.setCameraSensitivity(settings.cameraSensitivity);
@@ -235,6 +283,15 @@ export function ChatPanel({ api }: ChatPanelProps) {
         </div>
       )}
 
+      {sessionHint(session) && (
+        <div className="chat-cap" role="status">
+          <span>{sessionHint(session)}</span>
+          <button type="button" onClick={() => changeSession("dedicated")} disabled={sessionBusy}>
+            改用专用会话
+          </button>
+        </div>
+      )}
+
       {notice && (
         <div className="chat-notice" role="status">
           <span>{notice}</span>
@@ -298,6 +355,29 @@ export function ChatPanel({ api }: ChatPanelProps) {
             />
             <span>仅字幕（不合成语音）</span>
           </label>
+          <div className="chat-session">
+            <span className="chat-session-head">记忆来源</span>
+            <div className="chat-session-modes">
+              {(Object.keys(SESSION_LABEL) as SessionMode[]).map((mode) => (
+                <button
+                  key={mode}
+                  type="button"
+                  aria-pressed={session?.mode === mode}
+                  disabled={sessionBusy || session === null}
+                  onClick={() => changeSession(mode)}
+                >
+                  {SESSION_LABEL[mode]}
+                </button>
+              ))}
+            </div>
+            <small>
+              {session
+                ? session.mode === "shared"
+                  ? `已往 QQ 那条记录写了 ${session.sharedTurns} 句（提醒线 ${session.limit} 句）`
+                  : "游戏专用会话：QQ 那边不会多出这些回合"
+                : "桥接没有回会话信息，暂时无法判断来源"}
+            </small>
+          </div>
         </div>
       )}
 

@@ -27,8 +27,9 @@ from .adapter import (
     suppress_external_splitter,
 )
 from .hastsec import HastSecClient
-from .session import DEFAULT_UMO, resolve_umo
+from .session import DEFAULT_UMO, SESSION_MODES, resolve_umo, umo_for_mode
 from .token import load_token, token_path
+from .usage import SessionUsage
 from .tts import TtsClient
 from .web_api import LocalServer, create_app
 
@@ -90,6 +91,7 @@ class Mas3dGamePlugin(Star):
         self.server: LocalServer | None = None
         self.hast: HastSecClient | None = None
         self.tts: TtsClient | None = None
+        self.usage = SessionUsage(DATA_DIR / "mas3d" / "usage.json")
 
     async def initialize(self) -> None:
         self.bridge = self._build_bridge()
@@ -105,7 +107,13 @@ class Mas3dGamePlugin(Star):
         if error:
             logger.warning("mas3d_game 桥接初始化有问题：%s", error)
         await self._start_web_api()
-        logger.info("mas3d_game %s loaded (umo=%s)", __version__, self.umo)
+        logger.info(
+            "mas3d_game %s loaded (umo=%s, mode=%s, sharedTurns=%s)",
+            __version__,
+            self.current_umo(),
+            self.usage.mode,
+            self.usage.shared_turns,
+        )
 
     async def terminate(self) -> None:
         if self.server is not None:
@@ -184,11 +192,33 @@ class Mas3dGamePlugin(Star):
         suppress_external_splitter(result)
         skip_platform_tts(result)
 
+    def current_umo(self) -> str:
+        """这一回合要用的会话 id：共享 QQ 会话，或游戏专用的那条。"""
+        return umo_for_mode(self.usage.mode, self.umo)
+
+    def session_snapshot(self) -> dict[str, Any]:
+        """给 /health 与 /session 用：当前模式、已写入回合数、在用的 umo。"""
+        snapshot = self.usage.snapshot()
+        snapshot["umo"] = self.current_umo()
+        snapshot["configuredUmo"] = self.umo
+        return snapshot
+
+    def set_session_mode(self, mode: str) -> dict[str, Any]:
+        """切共享 / 专用会话；不合法抛 ValueError（端点翻成 400）。"""
+        value = (mode or "").strip().lower()
+        if value not in SESSION_MODES:
+            raise ValueError(f"会话模式只能是 {' / '.join(SESSION_MODES)}")
+        self.usage.set_mode(value)
+        logger.info("mas3d_game 会话模式切到 %s（umo=%s）", value, self.current_umo())
+        return self.session_snapshot()
+
     async def handle_turn(self, text: str) -> str:
         """供 Task 12 的 Web API 调用：跑一回合并返回 Monika 的回复文本。"""
         if self.bridge is None:
             raise RuntimeError("桥接未初始化")
-        return await run_turn(self.bridge, text)
+        reply = await run_turn(self.bridge, text, umo=self.current_umo())
+        self.usage.record_turn()
+        return reply
 
     async def handle_plan(self, text: str, context: Any = ()) -> dict[str, Any]:
         """供动作端点 / WS 调用：问 HAST-SEC 要一份动作计划（不可用时由调用方降级）。"""

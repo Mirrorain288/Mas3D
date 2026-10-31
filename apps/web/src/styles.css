@@ -287,6 +287,52 @@ body {
 
 .chat-offline,
 .chat-error,
+.chat-cap {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 10px 8px;
+  padding: 7px 9px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: #ffe6bd;
+  background: rgba(120, 78, 20, 0.35);
+  border: 1px solid rgba(255, 196, 110, 0.35);
+  border-radius: 6px;
+}
+
+.chat-cap button {
+  flex: none;
+  white-space: nowrap;
+}
+
+.chat-session {
+  display: grid;
+  gap: 5px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.chat-session-head {
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+
+.chat-session-modes {
+  display: flex;
+  gap: 6px;
+}
+
+.chat-session-modes button[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.chat-session small {
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
 .chat-notice {
   display: flex;
   align-items: center;

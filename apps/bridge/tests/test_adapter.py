@@ -118,7 +118,7 @@ def test_umo_setter_missing_degrades(adapter):
 
     applied = adapter.apply_umo(event, QQ_UMO)
 
-    assert applied.startswith("mas3d:GameMessage:")
+    assert applied.startswith("Monika:FriendMessage:mas3d-")
     assert event.degraded is True
 
 
@@ -286,3 +286,13 @@ def test_skip_platform_tts_keeps_other_results(adapter, monkeypatch):
     adapter.skip_platform_tts(result)
 
     assert result.result_content_type.name == "GENERAL_RESULT"
+@pytest.mark.asyncio
+async def test_run_turn_can_use_a_dedicated_session(adapter, session_mod, bridge_factory):
+    bridge = bridge_factory("专线回复")
+
+    reply = await adapter.run_turn(bridge, "在吗", umo=session_mod.DEDICATED_UMO)
+
+    assert reply == "专线回复"
+    assert bridge.last_event is not None
+    assert bridge.last_event.unified_msg_origin == session_mod.DEDICATED_UMO
+    assert bridge.last_event.unified_msg_origin != QQ_UMO

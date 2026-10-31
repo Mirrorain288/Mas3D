@@ -17,8 +17,31 @@ SCENE_PREFIX_ALIASES: tuple[str, ...] = (SCENE_PREFIX, "(3D教室)")
 DEFAULT_UMO = "Monika:FriendMessage:2441388327"
 """QQ 私聊会话的 unified_msg_origin（platform_id:message_type:session_id）。"""
 
-FALLBACK_PLATFORM = "mas3d"
-FALLBACK_MESSAGE_TYPE = "GameMessage"
+FALLBACK_PLATFORM = "Monika"
+"""兜底 umo 的平台前缀必须是一个真实存在的平台适配器 id。
+
+AstrBot 的 MessageSession.from_str 会用 MessageType(...) 强校验 message_type，
+未知值直接抛 ValueError；而未知 umo 又会被 astrbot_config_mgr 落到 "default"
+配置档，这一档在本机没有对应的 PipelineScheduler，事件会被 EventBus 静默丢掉
+（实测：日志打印出事件后没有任何后续，活跃事件表也一直为空）。
+所以兜底与专用 umo 都走「已配置平台 + 合法消息类型」。"""
+
+FALLBACK_MESSAGE_TYPE = "FriendMessage"
+
+DEDICATED_UMO = "Monika:FriendMessage:mas3d-player"
+"""专用会话：不写进 QQ 历史，记忆从零开始（共享会话太长时切过去）。
+
+平台前缀取 Monika（aiocqhttp 实例 id），这样 umop 路由表里的 "Monika:*:*"
+会把它分配到 MoMo 配置档，从而复用同一套 provider / 人设 / 插件；
+会话行仍按 umo 独立，所以 QQ 那边不会多出这些回合。"""
+
+SESSION_MODES: tuple[str, ...] = ("shared", "dedicated")
+"""shared = 与 QQ 共用同一条会话；dedicated = 游戏独占一条。"""
+
+DEFAULT_SESSION_MODE = "shared"
+
+SHARED_TURN_LIMIT = 60
+"""共享会话的软上限（游戏回合数）：超过只提示可换会话，不删任何历史。"""
 
 
 def scene_text(text: str) -> str:
@@ -52,6 +75,22 @@ def resolve_umo(raw: str | None) -> str:
     return value if is_valid_umo(value) else DEFAULT_UMO
 
 
+def resolve_mode(raw: str | None) -> str:
+    """会话模式只认 shared / dedicated，其它一律回落到共享。"""
+    value = (raw or "").strip().lower()
+    return value if value in SESSION_MODES else DEFAULT_SESSION_MODE
+
+
+def umo_for_mode(mode: str, shared_umo: str = DEFAULT_UMO) -> str:
+    """按模式给出这一回合要用的 umo。"""
+    if resolve_mode(mode) == "shared":
+        return resolve_umo(shared_umo)
+    return DEDICATED_UMO
+
+
 def fallback_umo() -> str:
-    """事件 setter 不可用时用的独立会话 id（不与 QQ 会话混写）。"""
-    return f"{FALLBACK_PLATFORM}:{FALLBACK_MESSAGE_TYPE}:{uuid.uuid4().hex}"
+    """事件 setter 不可用时用的独立会话 id（不与 QQ 会话混写）。
+
+    必须保持三段合法且平台前缀已被 umop 路由，否则事件会被丢进 default 档。
+    """
+    return f"{FALLBACK_PLATFORM}:{FALLBACK_MESSAGE_TYPE}:mas3d-{uuid.uuid4().hex}"

@@ -116,6 +116,19 @@ def create_app(
             return JSONResponse({"ok": False, "error": "只接受本机请求"}, status_code=403)
         return await call_next(request)
 
+    def session_info() -> dict[str, Any]:
+        """当前会话信息；runner 没实现就给出最小形状，前端不必分支。"""
+        getter = getattr(runner, "session_snapshot", None)
+        if callable(getter):
+            try:
+                snapshot = getter()
+            except Exception:  # noqa: BLE001 - 快照失败不该让 health 挂
+                snapshot = {}
+            if isinstance(snapshot, dict):
+                return snapshot
+        return {"mode": "shared", "sharedTurns": 0, "limit": 0, "overLimit": False,
+                "umo": str(getattr(runner, "umo", ""))}
+
     @app.get("/mas3d/api/health")
     async def health(_: None = Depends(require_token)) -> dict[str, Any]:
         return {
@@ -123,7 +136,34 @@ def create_app(
             "plugin": plugin_version,
             "umo": str(getattr(runner, "umo", "")),
             "degraded": bool(getattr(runner, "degraded", False)),
+            "session": session_info(),
         }
+
+    @app.get("/mas3d/api/session")
+    async def get_session(_: None = Depends(require_token)) -> dict[str, Any]:
+        """当前用哪条会话、游戏已经往里写了多少句（前端据此提示可切换）。"""
+        return {"ok": True, "session": session_info()}
+
+    @app.post("/mas3d/api/session")
+    async def set_session(request: Request, _: None = Depends(require_token)) -> JSONResponse:
+        """切换共享 QQ 会话 / 游戏专用会话；只影响之后的回合，不动任何历史。"""
+        try:
+            payload = await request.json()
+        except (ValueError, UnicodeDecodeError):
+            return JSONResponse({"ok": False, "code": "bad_request", "message": "body 必须是 JSON"}, status_code=400)
+        mode = payload.get("mode") if isinstance(payload, dict) else None
+        if not isinstance(mode, str) or not mode.strip():
+            return JSONResponse({"ok": False, "code": "bad_request", "message": "缺少 mode"}, status_code=400)
+        setter = getattr(runner, "set_session_mode", None)
+        if not callable(setter):
+            return JSONResponse({"ok": False, "code": "bridge_down", "message": "桥接不支持会话切换"}, status_code=503)
+        try:
+            setter(mode)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "code": "bad_request", "message": str(exc)}, status_code=400)
+        except RuntimeError as exc:
+            return JSONResponse({"ok": False, "code": "bridge_down", "message": str(exc)}, status_code=503)
+        return JSONResponse({"ok": True, "session": session_info()})
 
     @app.post("/mas3d/api/motion/plan")
     async def motion_plan(request: Request, _: None = Depends(require_token)) -> JSONResponse:

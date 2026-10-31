@@ -181,6 +181,19 @@ function readBody(request, limitBytes = 64 * 1024) {
   });
 }
 
+// --- 会话来源（风险 1：共享 / 专用，软上限只看不改历史）-----------------------
+const SESSION = { mode: "shared", sharedTurns: 57, limit: 60 };
+
+function sessionPayload() {
+  return {
+    mode: SESSION.mode,
+    sharedTurns: SESSION.sharedTurns,
+    limit: SESSION.limit,
+    overLimit: SESSION.sharedTurns >= SESSION.limit,
+    umo: SESSION.mode === "shared" ? "Monika:FriendMessage:2441388327" : "Monika:FriendMessage:mas3d-player",
+  };
+}
+
 const CORS = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "Authorization, Content-Type",
@@ -212,6 +225,32 @@ const server = createServer((request, response) => {
   }
   if (!authorized(request, url)) {
     sendJson(401, { ok: false, code: "bad_request", message: "缺少或错误的令牌" });
+    return;
+  }
+  if (request.method === "GET" && url.pathname === "/mas3d/api/session") {
+    sendJson(200, { ok: true, session: sessionPayload() });
+    return;
+  }
+  if (request.method === "POST" && url.pathname === "/mas3d/api/session") {
+    void readBody(request)
+      .then((raw) => {
+        let body;
+        try {
+          body = JSON.parse(raw);
+        } catch {
+          sendJson(400, { ok: false, code: "bad_request", message: "body 不是 JSON" });
+          return;
+        }
+        const mode = typeof body?.mode === "string" ? body.mode : "";
+        if (mode !== "shared" && mode !== "dedicated") {
+          sendJson(400, { ok: false, code: "bad_request", message: "会话模式只能是 shared / dedicated" });
+          return;
+        }
+        SESSION.mode = mode;
+        log("session mode ->", mode);
+        sendJson(200, { ok: true, session: sessionPayload() });
+      })
+      .catch(() => sendJson(400, { ok: false, code: "bad_request", message: "读取请求体失败" }));
     return;
   }
   if (request.method === "POST" && url.pathname === "/mas3d/api/voice/synth") {
@@ -257,6 +296,10 @@ const server = createServer((request, response) => {
   }
   sendJson(404, { ok: false, code: "bad_request", message: "未知端点" });
 });
+
+function noteTurn() {
+  if (SESSION.mode === "shared") SESSION.sharedTurns += 1;
+}
 
 const wss = new WebSocketServer({ server, path: "/mas3d/ws" });
 
@@ -315,7 +358,10 @@ wss.on("connection", (socket, request) => {
       return;
     }
 
-    later(760, () => socket.send(JSON.stringify({ type: "reply", turnId, text: replyFor(text), cue: cueFor(text) })));
+    later(760, () => {
+      noteTurn();
+      socket.send(JSON.stringify({ type: "reply", turnId, text: replyFor(text), cue: cueFor(text) }));
+    });
 
     if (options.scenario === "command") {
       later(980, () => socket.send(JSON.stringify({ type: "intent", turnId, plan: commandPlan(text) })));

@@ -7,7 +7,9 @@
 2. send() 被改写成把文本交给回调，不经过 QQ 平台适配器 —— 游戏里看到回复，
    QQ 里不会突然蹦出没头没尾的一句（是否回显由后续设置决定）。
 3. unified_msg_origin 的 setter 是 AstrBot 内部 API（astr_message_event.py:112）；
-   一旦上游删掉它，降级成独立 umo（mas3d:GameMessage:<uuid>），并置 degraded。
+   一旦上游删掉它，降级成独立 umo（Monika:FriendMessage:mas3d-<uuid>），并置 degraded。
+   平台前缀与消息类型必须真实存在：未知 umo 会落到 "default" 配置档，而那一档
+   在本机没有 PipelineScheduler，事件会被 EventBus 直接丢弃（2026-10-31 实测）。
 """
 
 from __future__ import annotations
@@ -249,8 +251,14 @@ class TurnBridge:
         self.umo = resolve_umo(umo)
         self.last_event: GameMessageEvent | None = None
 
-    def create_event(self, text: str, on_send: SendCallback) -> GameMessageEvent:
-        return GameMessageEvent(text=text, umo=self.umo, on_send=on_send)
+    def create_event(
+        self,
+        text: str,
+        on_send: SendCallback,
+        umo: str | None = None,
+    ) -> GameMessageEvent:
+        """建事件；umo 给了就临时改指过去（共享 / 专用会话由调用方决定）。"""
+        return GameMessageEvent(text=text, umo=umo or self.umo, on_send=on_send)
 
     async def dispatch(self, event: GameMessageEvent) -> None:  # pragma: no cover - 抽象
         raise NotImplementedError
@@ -266,6 +274,26 @@ def _registry_is_active(event: GameMessageEvent) -> bool:
     if not isinstance(events, dict):
         return False
     return event in events.get(event.unified_msg_origin, ())
+
+
+def _diag_registry(event: GameMessageEvent) -> None:  # pragma: no cover - 诊断用
+    """一次性把活跃事件表的真实内容打进日志，定位 umo 不匹配 / 未接管。"""
+    try:
+        from astrbot.api import logger
+
+        from astrbot.core.utils.active_event_registry import active_event_registry
+    except Exception:  # noqa: BLE001
+        return
+    events = getattr(active_event_registry, "_events", None)
+    tracked = list(events) if isinstance(events, dict) else []
+    logger.warning(
+        "mas3d diag: 事件没被管线接管 umo=%r degraded=%r valid=%r 活跃会话数=%d %s",
+        event.unified_msg_origin,
+        getattr(event, "degraded", None),
+        is_valid_umo(str(event.unified_msg_origin)),
+        len(tracked),
+        "" if tracked else "（活跃表为空：多为 umo 无法路由到可用配置档）",
+    )
 
 
 class QueueTurnBridge(TurnBridge):
@@ -299,6 +327,7 @@ class QueueTurnBridge(TurnBridge):
             elif seen:
                 return
             elif time.monotonic() > deadline:
+                _diag_registry(event)
                 raise TurnDispatchError(
                     "事件没有被 AstrBot 管线接管：EventBus 未运行或找不到该会话的配置",
                 )
@@ -311,6 +340,7 @@ async def run_turn(
     *,
     timeout_s: float = TURN_TIMEOUT_S,
     on_chunk: Callable[[str], Awaitable[None]] | None = None,
+    umo: str | None = None,
 ) -> str:
     """跑一回合：注入场景前缀 → 交给桥接 → 返回剥掉前缀的回复。"""
     prompt = text.strip()
@@ -324,7 +354,7 @@ async def run_turn(
         if on_chunk is not None:
             await on_chunk(chunk)
 
-    event = bridge.create_event(scene_text(prompt), collect)
+    event = bridge.create_event(scene_text(prompt), collect, umo)
     bridge.last_event = event
     await asyncio.wait_for(bridge.dispatch(event), timeout=timeout_s)
     full = extra_text(event, FULL_REPLY_EXTRA)

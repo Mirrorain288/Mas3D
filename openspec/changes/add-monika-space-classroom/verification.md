@@ -122,6 +122,38 @@ Fcl_ALL_Joy=0.680 / 断开桥接出现 `.chat-offline` / 无未捕获异常。
 
 测试：`test_turn_id_is_echoed_back` / `test_overlong_turn_id_is_replaced`，以及 6 条 frame 契约断言（`pnpm --filter @mas3d/web e2e:wire` → `wire ok (6 checks)`）。真实链路复跑（`e2e:real`）：回复 21.60 s、语音 200、口型峰值 0.9、`errors: []`。
 
+### 7.3 会话模式与迟到动作（风险 1 / 风险 3）
+
+用户要求处理两条剩余风险：共用 QQ 会话的无限增长，以及迟到的意图帧驱动手臂。代码到位后第一次真机跑**专用会话**，回合一开头就失败：
+
+| 观察点 | 事实 |
+| --- | --- |
+| WS 帧 | `["ack","thinking","error"]`，elapsedMs 8034，错误「事件没有被 AstrBot 管线接管：EventBus 未运行或找不到该会话的配置」 |
+| 库 | `conversations` 无新行 |
+| backend.log | 08:27:53.775 打印了本回合的玩家消息，之后 8 分钟没有任何管线日志，也没有异常栈 |
+| 探针（超时路径临时加的一行 WARN） | `umo='mas3d_game:FriendMessage:mas3d-game' degraded=True valid=True keys=[]` → 事件根本没有进 active_event_registry |
+| 对照 | 同一探针在 shared 模式完成 20.3 s 的真回合，说明 WS、registry、超时检测都正常 |
+
+根因：专用 umo 用了 `GameMessage` 作消息类型，`MessageSession.from_str`（umo setter 内部）按 `MessageType` 解析时抛 `ValueError`，事件保留构造时的 umo，回落 umo 同形同样非法；识别不出的 umo 被路由到 `default` 配置档，而本机这一档没有 `PipelineScheduler`，`EventBus.dispatch` 只把来话打印出来就把事件丢了。修法：专用 umo 改用真实平台前缀 + `FriendMessage`（`Monika:FriendMessage:mas3d-player`），与 QQ 走同一套 provider/人设/插件，只有会话行不同；超时路径保留诊断日志（umo、降级标志、活跃事件表大小）。
+
+修复后的双向验证：
+
+| 场景 | 结果 |
+| --- | --- |
+| `POST /mas3d/api/session {"mode":"dedicated"}` | 200，`umo=Monika:FriendMessage:mas3d-player` |
+| 专用会话回合 | ok，22.17 s，回复「能听到哦，声音很清楚。…」，帧 ack/thinking/reply，无 degraded |
+| 专用会话写库 | 新增行 `conversation_id=b3768360-d110-42a2-85da-c64a239983a9`、`platform_id=mas3d_game`、575 字符、updated_at 00:33:49 |
+| QQ 是否被写 | `5d281073-…` 在同一时段保持 1,410,809 字符（00:31:30），未变 |
+| 切回 shared 再跑一回合 | 22.45 s 成功，`sharedTurns=2`（专用回合不计数），QQ 行 1,410,809 → 1,411,498；专用行仍是 575 字符 |
+
+迟到动作：`intent` 帧带 `turnId`，前端只接受「刚回复过的那一回合」或「正在等的回合」（`useBridge.ts:219-231`），
+新问题在等回复时上一回合的计划一律丢弃；契约测试新增两条场景（软上限提示 61 句、一键切专用会话）。
+
+回归：`pytest apps/bridge/tests -q` 103 passed；`pnpm -r test` protocol 20 / motion 9 / web 88；
+`pnpm --filter @mas3d/web build` 1,032.99 kB（gzip 276.17）；
+`node apps/web/e2e/wire.mjs` → `wire ok (10 checks)`（其中「ack 丢了也收得下回复」原为固定 400 ms 睡眠，
+首屏 vite 冷编译时偶发读到旧 phase，已改为等 `document.body.dataset.phase === "idle"`）。
+
 ## 8. 已知遗留
 
 1. 前端单包 1.03 MB 未拆包（vite 提示 chunk>500 kB）。

@@ -73,8 +73,9 @@ const browser = await chromium.launch({
 
 let exitCode = 1;
 try {
-  async function fresh() {
+  async function fresh(options = {}) {
     const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+    if (options.sessionRoute) await page.route("**/mas3d/api/session", options.sessionRoute);
     // 回合 id 与消息 id 曾经撞在一起（两条 Turn 同一个 key），React 只报 console 错误，
     // 界面上看起来只是"少了一条" —— 所以这类错误必须当断言，不能只靠肉眼看截图
     page.on("console", (msg) => {
@@ -122,7 +123,8 @@ try {
     await say(page, "帧契约二");
     const turnId = await page.evaluate(() => window.__fake.sent[0].turnId);
     await page.evaluate((id) => window.__fake.push({ type: "reply", turnId: id, text: "没有 ack 的回复" }), turnId);
-    await page.waitForTimeout(400);
+    // 首屏 vite 还在冷编译时，固定 sleep 会偶发读到旧 phase（曾复现一次）
+    await page.waitForFunction(() => document.body.dataset.phase === "idle", null, { timeout: 5000 }).catch(() => {});
     const dom = await page.evaluate(() => ({ phase: document.body.dataset.phase, text: document.querySelector(".turn.monika .turn-text")?.textContent ?? null }));
     check("ack 丢了也收得下回复", dom.phase === "idle" && dom.text === "没有 ack 的回复", JSON.stringify(dom));
     await page.close();
@@ -157,6 +159,71 @@ try {
     await page.waitForTimeout(400);
     const dom = await page.evaluate(() => ({ phase: document.body.dataset.phase, text: document.querySelector(".turn.monika .turn-text")?.textContent ?? null }));
     check("error 后的迟到回复不显示", dom.phase === "error" && dom.text === null, JSON.stringify(dom));
+    await page.close();
+  }
+
+  // 5) 迟到的动作计划：回复之后才到的 intent 只认「刚回复的那回合」，
+  //    玩家已经问下一句时必须丢弃（否则上一回合的手臂会突然抬起来）
+  {
+    const page = await fresh();
+    const plan = {
+      base: { change: false, name: "待机", motion: 0, rest: true },
+      operation: "command",
+      timing: "同时",
+      intents: [{ key: "右臂上抬", speed: 1, strength: 1, hold: 2, delay: 0 }],
+      reply: "",
+    };
+    await say(page, "帧契约五");
+    const turnId = await page.evaluate(() => window.__fake.sent[0].turnId);
+    await page.evaluate((args) => {
+      window.__fake.push({ type: "ack", turnId: args.id });
+      window.__fake.push({ type: "reply", turnId: args.id, text: "这一回合的回复" });
+    }, { id: turnId });
+    await page.waitForTimeout(300);
+    await page.evaluate((args) => window.__fake.push({ type: "intent", turnId: args.id, plan: args.plan }), { id: turnId, plan });
+    await page.waitForTimeout(200);
+    const accepted = await page.evaluate(() => window.__mas3dIntent);
+
+    // 玩家追问下一句 → 上一回合的计划即使到了也不该动
+    await say(page, "帧契约五之后");
+    await page.evaluate((args) => window.__fake.push({ type: "intent", turnId: args.id, plan: args.plan }), { id: turnId, plan });
+    await page.waitForTimeout(200);
+    const after = await page.evaluate(() => window.__mas3dIntent);
+    check("本回合的 intent 被应用", accepted.applied === 1 && accepted.dropped === 0, JSON.stringify(accepted));
+    check("下一句之后的迟到 intent 被丢弃", after.applied === 1 && after.dropped === 1, JSON.stringify(after));
+    await page.close();
+  }
+
+  // 6) 会话来源：超过软上限时提示，并可一键切到专用会话
+  {
+    const posts = [];
+    let mode = "shared";
+    const route = async (route) => {
+      const method = route.request().method();
+      if (method === "POST") {
+        posts.push(route.request().postDataJSON());
+        mode = posts[posts.length - 1].mode;
+      }
+      const payload = {
+        ok: true,
+        session: {
+          mode,
+          sharedTurns: 61,
+          limit: 60,
+          overLimit: mode === "shared",
+          umo: mode === "shared" ? "Monika:FriendMessage:2441388327" : "Monika:FriendMessage:mas3d-player",
+        },
+      };
+      await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(payload) });
+    };
+    const page = await fresh({ sessionRoute: route });
+    await page.waitForSelector(".chat-cap", { timeout: 10000 });
+    const hint = await page.textContent(".chat-cap span");
+    await page.click(".chat-cap button");
+    await page.waitForFunction(() => document.body.dataset.session === "dedicated", null, { timeout: 10000 });
+    const banner = await page.locator(".chat-cap").count();
+    check("超过软上限时给出提示", typeof hint === "string" && hint.includes("61"), hint ?? "");
+    check("一键切到专用会话", posts.length === 1 && posts[0].mode === "dedicated" && banner === 0, JSON.stringify(posts));
     await page.close();
   }
 

@@ -35,6 +35,36 @@ class StubRunner:
         return self.reply
 
 
+class SessionRunner(StubRunner):
+    """带会话模式的 runner：记录切换，快照与真实插件同形状。"""
+
+    def __init__(self, mode: str = "shared", *, shared_turns: int = 3, limit: int = 60, reject: bool = False):
+        super().__init__()
+        self.mode = mode
+        self.shared_turns = shared_turns
+        self.limit = limit
+        self.reject = reject
+        self.mode_calls: list[str] = []
+
+    def session_snapshot(self) -> dict:
+        return {
+            "mode": self.mode,
+            "sharedTurns": self.shared_turns,
+            "limit": self.limit,
+            "overLimit": self.shared_turns >= self.limit,
+            "umo": UMO,
+        }
+
+    def set_session_mode(self, mode: str) -> dict:
+        if self.reject:
+            raise RuntimeError("会话切换不可用")
+        if mode not in ("shared", "dedicated"):
+            raise ValueError("会话模式只能是 shared / dedicated")
+        self.mode_calls.append(mode)
+        self.mode = mode
+        return self.session_snapshot()
+
+
 @pytest.fixture(scope="module")
 def web_api(plugin):
     return importlib.import_module("astrbot_plugin_mas3d_game.web_api")
@@ -66,7 +96,19 @@ def test_health_with_token_200(web_api, make_client):
     client = make_client(StubRunner())
     response = client.get("/mas3d/api/health", headers={"Authorization": f"Bearer {TOKEN}"})
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "plugin": "0.1.0", "umo": UMO, "degraded": False}
+    payload = response.json()
+    assert payload["ok"] is True
+    assert payload["plugin"] == "0.1.0"
+    assert payload["umo"] == UMO
+    assert payload["degraded"] is False
+    # runner 没有会话接口时也要给出最小形状，前端不用分支
+    assert payload["session"] == {
+        "mode": "shared",
+        "sharedTurns": 0,
+        "limit": 0,
+        "overLimit": False,
+        "umo": UMO,
+    }
 
 
 def test_health_accepts_query_token(web_api, make_client):
@@ -582,3 +624,72 @@ def test_cors_ignores_foreign_origin(make_client):
     )
 
     assert "access-control-allow-origin" not in resp.headers
+
+def test_get_session_returns_snapshot(web_api, make_client):
+    client = make_client(SessionRunner(shared_turns=12))
+    response = client.get("/mas3d/api/session", headers={"Authorization": f"Bearer {TOKEN}"})
+    assert response.status_code == 200
+    assert response.json()["session"]["sharedTurns"] == 12
+    assert response.json()["session"]["mode"] == "shared"
+
+
+def test_get_session_without_token_401(web_api, make_client):
+    client = make_client(SessionRunner())
+    assert client.get("/mas3d/api/session").status_code == 401
+
+
+def test_post_session_switches_mode(web_api, make_client):
+    runner = SessionRunner()
+    client = make_client(runner)
+    response = client.post(
+        "/mas3d/api/session",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json={"mode": "dedicated"},
+    )
+    assert response.status_code == 200
+    assert response.json()["session"]["mode"] == "dedicated"
+    assert runner.mode_calls == ["dedicated"]
+
+
+def test_post_session_rejects_unknown_mode(web_api, make_client):
+    runner = SessionRunner()
+    client = make_client(runner)
+    response = client.post(
+        "/mas3d/api/session",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json={"mode": "cloud"},
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "bad_request"
+    assert runner.mode_calls == []
+
+
+def test_post_session_without_mode_400(web_api, make_client):
+    client = make_client(SessionRunner())
+    response = client.post(
+        "/mas3d/api/session",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json={},
+    )
+    assert response.status_code == 400
+
+
+def test_post_session_without_support_503(web_api, make_client):
+    client = make_client(StubRunner())
+    response = client.post(
+        "/mas3d/api/session",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json={"mode": "dedicated"},
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "bridge_down"
+
+
+def test_post_session_runtime_error_503(web_api, make_client):
+    client = make_client(SessionRunner(reject=True))
+    response = client.post(
+        "/mas3d/api/session",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+        json={"mode": "shared"},
+    )
+    assert response.status_code == 503
