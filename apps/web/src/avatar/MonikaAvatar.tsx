@@ -9,6 +9,9 @@ import { FaceDriver, FALLBACK_FACE_MAP, resolveFaceMap, type MorphMesh } from ".
 import { BLINK_CLOSE_MS, mulberry32, nextBlink } from "./idle";
 import { gazeTarget } from "./gaze";
 import { applyPose, armHoldEndMs, type PoseBones } from "./applyPose";
+import { detachExpressions } from "./vrmExpressions";
+import { solveKneeDelta } from "./seatFit";
+import { creditFromMeta, type VrmMetaLike } from "./modelCredit";
 import { LipSync, type AudioContextLike } from "./lipsync";
 
 type Axis3 = { x: number; y: number; z: number };
@@ -27,7 +30,10 @@ function offsetArm(node: THREE.Object3D | null, offset: Axis3): void {
   node.rotation.z += offset.z;
 }
 
-export const VRM_URL = "/assets/monika/Monika.vrm";
+const ENV_VRM_URL = (import.meta.env as unknown as Record<string, string | undefined>).VITE_VRM_URL;
+
+/** 角色模型地址。换模型不必改代码：构建或开发时设 VITE_VRM_URL 即可（见 README「换模型」）。 */
+export const VRM_URL = ENV_VRM_URL && ENV_VRM_URL.length > 0 ? ENV_VRM_URL : "/assets/monika/Monkia.vrm";
 
 /** 场景宿主交给角色的最小契约。 */
 export interface AvatarHost {
@@ -61,6 +67,8 @@ export interface MonikaAvatarProps {
   seat: SeatPose;
   onApi?: (api: AvatarApi | null) => void;
   onStatus?: (status: "loading" | "ready" | "placeholder", detail?: string) => void;
+  /** 模型 meta 派生的署名文案；占位人形或加载失败时为 null。显式允许 undefined（exactOptionalPropertyTypes）。 */
+  onCredit?: ((credit: string | null) => void) | undefined;
 }
 
 /**
@@ -130,6 +138,59 @@ function placeSeated(vrm: VRM, seat: SeatPose): void {
   vrm.scene.updateMatrixWorld(true);
 }
 
+/** 两只脚踝骨骼的平均世界高度；缺骨骼时返回 null（落座贴合会跳过）。 */
+function ankleWorldY(vrm: VRM): number | null {
+  const feet = [vrm.humanoid.getNormalizedBoneNode("leftFoot"), vrm.humanoid.getNormalizedBoneNode("rightFoot")].filter(
+    (node): node is THREE.Object3D => Boolean(node),
+  );
+  if (feet.length === 0) return null;
+  const world = new THREE.Vector3();
+  let sum = 0;
+  for (const foot of feet) {
+    foot.getWorldPosition(world);
+    sum += world.y;
+  }
+  return sum / feet.length;
+}
+
+/**
+ * 站立（绑定姿态）时「脚底到脚踝」的高度 = 这副模型脚掌的厚度。
+ *
+ * 不能直接用脚踝的世界高度：不同模型的原点未必在地面（实测 Monkia 的网格在原点下方
+ * 还有 4 cm，脚踝高度 0.100；Monika 的脚踝高度只有 0.040）。用「脚踝 − 站立包围盒最低点」
+ * 得到的才是与原点无关的模型属性。必须在 applySitPose 之前量，绑定姿态的包围盒才有效。
+ */
+function measureStandingSoleGap(vrm: VRM): number {
+  vrm.scene.updateMatrixWorld(true);
+  const ankle = ankleWorldY(vrm);
+  const box = new THREE.Box3().setFromObject(vrm.scene);
+  if (ankle === null || !Number.isFinite(box.min.y)) return 0;
+  return Math.max(0, ankle - box.min.y);
+}
+
+/**
+ * 落座贴地：hips 已经对齐座面（placeSeated），这里只靠小腿的额外弯曲把脚踝拉回站立高度。
+ * 腿比标定模型长的角色靠它把脚从地面里抬出来，短的则少弯一点——整体升降会让屁股浮在座面上。
+ */
+function fitSeatedFeet(vrm: VRM, targetY: number): number {
+  const left = vrm.humanoid.getNormalizedBoneNode("leftLowerLeg");
+  const right = vrm.humanoid.getNormalizedBoneNode("rightLowerLeg");
+  if (!left && !right) return 0;
+  const baseLeft = left?.rotation.x ?? 0;
+  const baseRight = right?.rotation.x ?? 0;
+  const apply = (delta: number): void => {
+    if (left) left.rotation.x = baseLeft + delta;
+    if (right) right.rotation.x = baseRight + delta;
+    vrm.scene.updateMatrixWorld(true);
+  };
+  const delta = solveKneeDelta((value) => {
+    apply(value);
+    return ankleWorldY(vrm) ?? targetY;
+  }, targetY);
+  apply(delta);
+  return delta;
+}
+
 /** 丢弃一个已经不需要的 glTF：VRM 走 deepDispose，普通 glTF 走同一套纹理/几何回收。 */
 function disposeGltf(gltf: GLTF): void {
   const loaded = gltf.userData.vrm as VRM | undefined;
@@ -149,9 +210,11 @@ function makePlaceholder(): THREE.Mesh {
  * Monika 角色宿主。渲染为 null —— 所有 3D 对象直接挂到场景里，
  * 由 Scene 的渲染循环通过 host.addTick 驱动。
  */
-export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps): null {
+export function MonikaAvatar({ host, seat, onApi, onStatus, onCredit }: MonikaAvatarProps): null {
   const onApiRef = useRef(onApi);
   const onStatusRef = useRef(onStatus);
+  const onCreditRef = useRef(onCredit);
+  onCreditRef.current = onCredit;
   onApiRef.current = onApi;
   onStatusRef.current = onStatus;
 
@@ -163,6 +226,8 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
     let placeholder: THREE.Mesh | null = null;
     let audioCtx: AudioContext | null = null;
     let lip: LipSync | null = null;
+    // 落座贴合结果，供 DEV 钩子与冒烟断言查（clearanceM 是站立脚踝高度，kneeDelta 是额外弯曲）
+    let seatFit = { clearanceM: 0, kneeDelta: 0 };
 
     const cleanup = (): void => {
       detachTick?.();
@@ -203,6 +268,8 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
         }
         const loaded = gltf.userData.vrm as VRM | undefined;
         if (!loaded) {
+          // 占位人形没有 meta，页脚不能继续显示上一副模型的名字
+          onCreditRef.current?.(null);
           onStatusRef.current?.("placeholder", "VRM 插件没有返回角色");
           placeholder = makePlaceholder();
           placeholder.position.set(seat.position.x, 0, seat.position.z);
@@ -210,6 +277,7 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
           return;
         }
         vrm = loaded;
+        onCreditRef.current?.(creditFromMeta(loaded.meta as VrmMetaLike | null | undefined));
 
         // VRM 0.x 是 -Z 朝向，three-vrm 提供 180° 修正
         const metaVersion = (loaded.meta as { metaVersion?: string } | undefined)?.metaVersion;
@@ -224,9 +292,17 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
           }
         });
 
+        // 先量脚掌厚度（绑定姿态），再摆坐姿——顺序反了包围盒就跟着坐姿走，量不准
+        const soleGapM = measureStandingSoleGap(loaded);
         applySitPose(loaded);
         placeSeated(loaded, seat);
+        seatFit = { clearanceM: soleGapM, kneeDelta: fitSeatedFeet(loaded, soleGapM) };
         host.scene.add(loaded.scene);
+
+        // 换模时最容易踩的坑：有的 VRM 在 blendShapeGroups 里带真实 binds，three-vrm 的
+        // 表情管理器会在每帧 update() 里把自己的权重（默认全 0）写回同一批 Fcl_* 形变，
+        // 把 FaceDriver 的直写盖掉——症状是表情与口型偶发失灵。我们只留一条写入通道。
+        detachExpressions(loaded.expressionManager);
 
         const morphMeshes: MorphMesh[] = [];
         loaded.scene.traverse((object) => {
@@ -403,7 +479,7 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
             get lip() {
               return lip;
             },
-            stats: () => ({ ...stats, blinkWeight, blinkAt, now: performance.now() }),
+            stats: () => ({ ...stats, blinkWeight, blinkAt, now: performance.now(), seatFit }),
             pose(): Record<string, unknown> {
               const out: Record<string, unknown> = {};
               const names = ["hips", "head", "leftFoot", "rightFoot", "leftUpperLeg", "leftLowerLeg", "leftUpperArm", "leftHand"] as const;
@@ -430,6 +506,7 @@ export function MonikaAvatar({ host, seat, onApi, onStatus }: MonikaAvatarProps)
       undefined,
       (error) => {
         if (disposed) return;
+        onCreditRef.current?.(null);
         onStatusRef.current?.("placeholder", error instanceof Error ? error.message : String(error));
         placeholder = makePlaceholder();
         placeholder.position.set(seat.position.x, 0, seat.position.z);

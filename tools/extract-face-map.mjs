@@ -71,7 +71,7 @@ export function buildFaceMap(gltf) {
 }
 
 function main() {
-  const vrmPath = process.argv[2] ?? 'apps/web/public/assets/monika/Monika.vrm';
+  const vrmPath = process.argv[2] ?? 'apps/web/public/assets/monika/Monkia.vrm';
   const outPath = process.argv[3] ?? 'apps/web/src/avatar/face.map.json';
   const gltf = readGlbJson(readFileSync(vrmPath));
   const map = buildFaceMap(gltf);

@@ -61,6 +61,8 @@ obj/
 /apps/web/public/assets/*
 !/apps/web/public/assets/monika/
 /apps/web/public/assets/monika/*
+# 两副都已获再分发许可 + 署名 required；默认 Monkia.vrm，Monika.vrm 留作回退
+!/apps/web/public/assets/monika/Monkia.vrm
 !/apps/web/public/assets/monika/Monika.vrm
 
 # ---------- 素材（大体积本地资产，不入库）----------

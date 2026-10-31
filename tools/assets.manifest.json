@@ -129,6 +129,15 @@
       "tracked": true,
       "bytes": 23081108,
       "sha256": "b2590899e0eb002cc7670f5d7d101e5a1f3f8de8f4133464c0a1d718846963f9"
+    },
+    {
+      "source": "素材/3705117291637205523.vrm",
+      "target": "apps/web/public/assets/monika/Monkia.vrm",
+      "kind": "vrm",
+      "transform": "copy",
+      "tracked": true,
+      "bytes": 17143268,
+      "sha256": "0a43adbea8ccedacfac39959cc1a1c89eb6034d1a4f7338dbc0460d1faa27e67"
     }
   ]
 }

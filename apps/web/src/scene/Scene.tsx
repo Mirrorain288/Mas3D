@@ -25,6 +25,8 @@ export interface SceneApi {
 
 interface SceneProps {
   onReady?: (api: SceneApi) => void;
+  /** 角色署名（来自模型 meta）；加载中或占位人形时为 null。 */
+  onCredit?: (credit: string | null) => void;
 }
 
 const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
@@ -33,7 +35,7 @@ const clamp01 = (value: number): number => Math.min(1, Math.max(0, value));
  * 场景宿主：负责 WebGL 生命周期、资产装配、帧率自适应，并把每帧回调
  * 通过 AvatarHost 交给角色模块。对外只暴露 SceneApi 三个方法。
  */
-export function Scene({ onReady }: SceneProps) {
+export function Scene({ onReady, onCredit }: SceneProps) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const onReadyRef = useRef(onReady);
   onReadyRef.current = onReady;
@@ -268,6 +270,7 @@ export function Scene({ onReady }: SceneProps) {
             avatarRef.current = api;
           }}
           onStatus={(next) => setAvatarState(next)}
+          onCredit={onCredit}
         />
       )}
 

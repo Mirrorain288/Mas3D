@@ -10,7 +10,7 @@ pnpm assets:check  # 只校验：每个 target 是否存在、字节数与 sha25
 ```
 
 - `素材/` 是本地原始素材（**不入库**，见根 `.gitignore`）。
-- `apps/web/public/assets/` 是派生结果（**不入库**，唯一例外是 `monika/Monika.vrm`，它已获再分发许可，见下）。
+- `apps/web/public/assets/` 是派生结果（**不入库**，唯一例外是 `monika/Monkia.vrm` 与 `monika/Monika.vrm` 两副 VRM，它们都获再分发许可，见下）。
 - `assets.manifest.json` 是唯一事实来源：每条 `{ source, target, kind, transform }`，生成后追加 `bytes`/`sha256`。
 - `--check` 不写任何文件，不符合时打印 `missing: <target>` / `size: …` / `sha256: …` 并以退出码 1 结束，CI 与验收都跑它。
 
@@ -29,7 +29,8 @@ pnpm assets:check  # 只校验：每个 target 是否存在、字节数与 sha25
 | `hdri` | `hdri/night-sky-2k.jpg`、`hdri/night-sky-1k.jpg` | `NightSkyHDRI008_8K_TONEMAPPED.jpg` |
 | `pbr` | `pbr/{clay,wood-floor,ceiling}-{color,normal,roughness}@1k.webp` | `Clay002_4K-JPG`、`WoodFloor070_4K-JPG`、`OfficeCeiling001_2K-JPG` |
 | `glb` | `classroom/{desk,chair,blackboard,light}.glb` | `StylooClassroomAssetPack …/classroom/GLTF/{desk,chair,blackboardbig,lamp}.glb` |
-| `vrm` | `monika/Monika.vrm`（`tracked: true`） | `素材/莫妮卡.vrm`（23,081,108 字节） |
+| `vrm` | `monika/Monkia.vrm`（默认，`tracked: true`） | `素材/3705117291637205523.vrm`（17,143,268 字节） |
+| `vrm` | `monika/Monika.vrm`（回退，`tracked: true`） | `素材/莫妮卡.vrm`（23,081,108 字节） |
 
 ## 为什么天空盒不是 EXR
 
@@ -43,6 +44,7 @@ pnpm assets:check  # 只校验：每个 target 是否存在、字节数与 sha25
 
 ## 许可
 
-- `Monika.vrm`：作者 **tyler1234506**，reference `DDLC blazer`，许可证 `Other`（hub.vroid.com）。允许再分发与修改，**禁止商业使用**，必须署名 → 页面页脚保留署名（任务 4.7 / 5.x 已记）。改 FACE 形变只改运行时，不重写该文件。
+- `Monkia.vrm`（默认）：作者 **LilowLeeLani**，title `Monkia`，许可证 `Other`（hub.vroid.com）：再分发 allow、修改 allow、**署名 required**、企业商用与个人商用 disallow、性表现 disallow。页脚署名由模型 meta 派生（`apps/web/src/avatar/modelCredit.ts`），不写死作者。
+- `Monika.vrm`（回退）：作者 **tyler1234506**，reference `DDLC blazer`，许可证 `Other`（hub.vroid.com），条款与上面同一档。用 `VITE_VRM_URL=/assets/monika/Monika.vrm` 切回。改 FACE 形变只改运行时，不重写文件。
 - Styloo 教室包：随包 README 声明，仅用于非商用作品；本项目只取 4 个 GLB，不打包其原始贴图集以外内容。
 - Poly Haven 材质与 HDRI：CC0。

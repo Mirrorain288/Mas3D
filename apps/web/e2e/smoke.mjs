@@ -46,6 +46,13 @@ function stopChildren() {
   }
 }
 
+// 换模验证：VITE_VRM_URL=/assets/monika/Monika.vrm node e2e/smoke.mjs
+const SELECTED_VRM = process.env.VITE_VRM_URL && process.env.VITE_VRM_URL.length > 0
+  ? process.env.VITE_VRM_URL
+  : "/assets/monika/Monkia.vrm";
+const EXPECTED_AUTHOR = process.env.MAS3D_EXPECT_AUTHOR
+  ?? (SELECTED_VRM.includes("Monkia") ? "LilowLeeLani" : "tyler1234506");
+
 const vite = await import("vite");
 const server = await vite.createServer({
   root: webRoot,
@@ -54,6 +61,8 @@ const server = await vite.createServer({
   // 产品默认连 8790 的真实桥接；冒烟测试把地址钉到 mock
   define: {
     "import.meta.env.VITE_MAS3D_WS": JSON.stringify("ws://localhost:" + BRIDGE_PORT + "/mas3d/ws"),
+    // 换模验证：VITE_VRM_URL=/assets/monika/Other.vrm node e2e/smoke.mjs
+    "import.meta.env.VITE_VRM_URL": JSON.stringify(process.env.VITE_VRM_URL ?? ""),
   },
   logLevel: "silent",
 });
@@ -92,6 +101,32 @@ try {
   await page.waitForFunction(() => Boolean(window.__mas3dAvatar && window.__mas3dAvatar.api), null, { timeout: 90000 });
   check("角色与表情驱动就绪", true, "window.__mas3dAvatar.api");
 
+  const credit = await page.evaluate(() => document.querySelector(".credit")?.textContent?.trim() ?? "");
+  check(
+    "页脚署名跟着模型走",
+    credit.includes(EXPECTED_AUTHOR) && credit.includes("非商用"),
+    credit + " ← 期望作者 " + EXPECTED_AUTHOR,
+  );
+
+  // 落座贴合：脚踝应停在「站姿脚踝高度」上，误差 1 cm 以内（腿长不同靠膝盖补偿吸收）
+  const fit = await page.evaluate(() => {
+    const hook = window.__mas3dAvatar;
+    const stats = hook.stats ? hook.stats() : null;
+    const pose = hook.pose ? hook.pose() : null;
+    return {
+      seatFit: stats ? stats.seatFit : null,
+      leftFoot: pose && pose.leftFoot ? pose.leftFoot.pos[1] : null,
+    };
+  });
+  const fitError = fit.seatFit && fit.leftFoot !== null ? Math.abs(fit.leftFoot - fit.seatFit.clearanceM) : Number.NaN;
+  check(
+    "坐姿双脚落地（膝盖按腿长补偿）",
+    Number.isFinite(fitError) && fitError <= 0.01,
+    "脚踝 " + fit.leftFoot + " m · 目标 " + (fit.seatFit ? fit.seatFit.clearanceM : "?") + " m · 误差 " +
+      (Number.isFinite(fitError) ? fitError.toFixed(4) : "NaN") + " m · 补偿 " +
+      (fit.seatFit ? fit.seatFit.kneeDelta.toFixed(3) : "?") + " rad",
+  );
+
   await page.waitForFunction(() => document.body.dataset.bridge === "online", null, { timeout: 20000 });
   check("桥接在线", true, "data-bridge=online");
 
@@ -115,9 +150,34 @@ try {
     window.__mas3dAvatar.vrm.scene.traverse((object) => {
       if (object.isMesh && object.morphTargetInfluences) meshes.push(object);
     });
-    return meshes.reduce((max, mesh) => Math.max(max, mesh.morphTargetInfluences?.[3] ?? 0), 0);
+    const weight = meshes.reduce((max, mesh) => Math.max(max, mesh.morphTargetInfluences?.[3] ?? 0), 0);
+    const driver = window.__mas3dAvatar.driver;
+    let inScene = null;
+    let driverWeight = null;
+    if (driver && driver.mesh) {
+      driverWeight = driver.mesh.morphTargetInfluences ? driver.mesh.morphTargetInfluences[3] ?? 0 : null;
+      inScene = false;
+      window.__mas3dAvatar.vrm.scene.traverse((object) => {
+        if (object === driver.mesh) inScene = true;
+      });
+    }
+    return {
+      weight,
+      emotion: driver ? driver.emotion : null,
+      intensity: driver ? driver.intensity : null,
+      degraded: driver ? driver.degradedCount : null,
+      meshes: meshes.length,
+      driverMesh: driver && driver.mesh ? driver.mesh.name : null,
+      driverWeight,
+      inScene,
+    };
   });
-  check("表情形变被驱动（Fcl_ALL_Joy）", joy > 0.2, "weight=" + joy.toFixed(3));
+  check(
+    "表情形变被驱动（Fcl_ALL_Joy）",
+    joy.weight > 0.2,
+    "weight=" + joy.weight.toFixed(3) + " emotion=" + joy.emotion + " intensity=" + joy.intensity +
+      " degraded=" + joy.degraded + " driverMesh=" + joy.driverMesh + " driverWeight=" + joy.driverWeight + " inScene=" + joy.inScene,
+  );
 
   bridge.kill();
   await page.waitForSelector(".chat-offline", { state: "visible", timeout: 8000 });
