@@ -9,8 +9,14 @@ import * as THREE from "three";
  *
  * 网格名来自 Blender 场景（见 .superpowers/mita-mesh-audit.json），改素材要同步这里。
  */
-export type RoomMaterialKind = "ceiling" | "paintedWhite" | "mirror" | "keep";
+export type RoomMaterialKind = "ceiling" | "paintedWhite" | "paintedTrim" | "wall" | "mirror" | "keep";
 
+/**
+ * 白模判定依据（把 glb 里的贴图抽出来逐张看过，.superpowers/room-tex/）：
+ * Tex_0381_2 是三块横板接缝的近白图 → 屋顶；Tex_0084_0 是一张「白塑料板」
+ * 图集，肉眼几乎无细节 → 窗套/窗台板（Mesh_0122out，窗上方那道死白横板就是它）；
+ * 墙纸 Tex_0376_2 的粉色云与白色顶带是有画的，只是顶带太干净，配一层凹凸就够。
+ */
 const KIND_BY_MESH: Readonly<Record<string, RoomMaterialKind>> = {
   /** 斜屋顶（两块坡面 + 屋脊），原贴图接近纯白 */
   Mesh_0116out: "ceiling",
@@ -18,6 +24,10 @@ const KIND_BY_MESH: Readonly<Record<string, RoomMaterialKind>> = {
   Mesh_0138out: "paintedWhite",
   /** 窗边墙上的四格置物架 */
   Mesh_0200out: "paintedWhite",
+  /** 窗套 + 窗上方那道横板（原贴图是白塑料图集，看不出细节） */
+  Mesh_0122out: "paintedTrim",
+  /** 墙壳：保留原墙纸的粉色云，只补一层凹凸与粗糙度 */
+  Mesh_0115out: "wall",
   /** 靠墙的立式穿衣镜（原材质是灰白塑料感） */
   Mesh_0014out: "mirror",
 };
@@ -64,11 +74,33 @@ async function loadTriple(base: string, repeatX: number, repeatY: number): Promi
  */
 export async function dressImportedRoom(room: THREE.Object3D): Promise<RoomDressing> {
   const ceiling = await loadTriple("ceiling", 1, 1);
+  // 腻子/乳胶漆那套图给白色木作补凹凸：不换底色，只让表面不再是「一块橡皮泥」。
+  const clay = await loadTriple("clay", 3, 3);
+  // 这些网格在原 glb 里都是 doubleSided（薄板、单面墙），换材质要跟着，否则从背面看会漏。
   const paintedWhite = new THREE.MeshStandardMaterial({
     color: 0xf1eae2,
-    roughness: 0.62,
+    roughness: 0.72,
     metalness: 0.02,
+    side: THREE.DoubleSide,
   });
+  if (clay.normalMap) {
+    paintedWhite.normalMap = clay.normalMap;
+    paintedWhite.normalScale.set(0.45, 0.45);
+  }
+  if (clay.roughnessMap) paintedWhite.roughnessMap = clay.roughnessMap;
+  // 窗套/窗台板：原来贴的是一张白塑料图集，换成有漆面质感的暖白木作。
+  const paintedTrim = new THREE.MeshStandardMaterial({
+    color: 0xe8dbcb,
+    roughness: 0.84,
+    metalness: 0,
+    side: THREE.DoubleSide,
+  });
+  // 只用凹凸/粗糙度：clay 的底色是红陶土，直接贴上去会把这圈白木作染成砖红。
+  if (clay.normalMap) {
+    paintedTrim.normalMap = clay.normalMap;
+    paintedTrim.normalScale.set(0.6, 0.6);
+  }
+  if (clay.roughnessMap) paintedTrim.roughnessMap = clay.roughnessMap;
   // 没有环境贴图时高金属度 = 纯黑，所以这里走「浅灰玻璃」而不是真镜面：
   // 低粗糙度给出高光，金属度留一点，反射交给窗外那盏月光。
   const mirror = new THREE.MeshStandardMaterial({
@@ -77,23 +109,30 @@ export async function dressImportedRoom(room: THREE.Object3D): Promise<RoomDress
     metalness: 0.18,
   });
   const ceilingMaterial = new THREE.MeshStandardMaterial({
-    color: 0xf4efe8,
+    color: 0xe2d7c9,
     roughness: 0.92,
     metalness: 0,
+    side: THREE.DoubleSide,
   });
   if (ceiling.map) ceilingMaterial.map = ceiling.map;
   if (ceiling.normalMap) ceilingMaterial.normalMap = ceiling.normalMap;
   if (ceiling.roughnessMap) ceilingMaterial.roughnessMap = ceiling.roughnessMap;
 
-  const byKind: Record<Exclude<RoomMaterialKind, "keep">, THREE.Material> = {
+  const byKind: Record<Exclude<RoomMaterialKind, "keep" | "wall">, THREE.Material> = {
     ceiling: ceilingMaterial,
     paintedWhite,
+    paintedTrim,
     mirror,
   };
-  const materials: THREE.Material[] = [paintedWhite, mirror, ceilingMaterial];
-  const textures = [ceiling.map, ceiling.normalMap, ceiling.roughnessMap].filter(
-    (texture): texture is THREE.Texture => texture !== null,
-  );
+  const materials: THREE.Material[] = [paintedWhite, paintedTrim, mirror, ceilingMaterial];
+  const textures = [
+    ceiling.map,
+    ceiling.normalMap,
+    ceiling.roughnessMap,
+    clay.map,
+    clay.normalMap,
+    clay.roughnessMap,
+  ].filter((texture): texture is THREE.Texture => texture !== null);
 
   room.traverse((child) => {
     const mesh = child as THREE.Mesh;
@@ -101,8 +140,30 @@ export async function dressImportedRoom(room: THREE.Object3D): Promise<RoomDress
     const kind = materialKindFor(mesh.name);
     if (kind === "keep") return;
     const previous = mesh.material;
-    const replaced = Array.isArray(previous) ? previous.map(() => byKind[kind]) : byKind[kind];
-    mesh.material = replaced;
+    if (kind === "wall") {
+      // 墙纸是这间屋子的主视觉，不能整块换掉：留原色与原贴图，只叠上腻子凹凸。
+      const source = Array.isArray(previous) ? previous[0] : previous;
+      const standard = source as THREE.MeshStandardMaterial | null;
+      const wall = new THREE.MeshStandardMaterial({
+        color: standard?.color?.clone() ?? new THREE.Color(0xffffff),
+        map: standard?.map ?? null,
+        roughness: 0.92,
+        metalness: 0,
+      });
+      if (clay.normalMap) {
+        // 墙面是大块斜平面，凹凸给强了会变成一片脏斑；只留一点点，够让白色顶带不是死平。
+        wall.normalMap = clay.normalMap;
+        wall.normalScale.set(0.14, 0.14);
+      }
+      if (clay.roughnessMap) wall.roughnessMap = clay.roughnessMap;
+      wall.transparent = false;
+      wall.side = standard?.side ?? THREE.FrontSide;
+      mesh.material = wall;
+      materials.push(wall);
+    } else {
+      const replaced = Array.isArray(previous) ? previous.map(() => byKind[kind]) : byKind[kind];
+      mesh.material = replaced;
+    }
     if (Array.isArray(previous)) {
       for (const material of previous) material?.dispose();
     } else {
@@ -273,7 +334,7 @@ export function createRoomLights(): RoomLightRig {
 
   // 斜屋顶本来只被台灯扫到一点，从室内看是一大片近黑的棕；补一盏弱的暖色顶光
   // 把屋脊照出来，不投影（否则屋顶会把整间房子压暗）。
-  const ceilingGlow = new THREE.PointLight(0xffdcb8, 6.0, 8.0, 2);
+  const ceilingGlow = new THREE.PointLight(0xffdcb8, 4.6, 8.0, 2);
   ceilingGlow.name = "ceiling-glow";
   ceilingGlow.position.set(0.4, -0.5, 2.55);
 

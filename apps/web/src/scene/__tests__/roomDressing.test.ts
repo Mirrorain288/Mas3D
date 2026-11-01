@@ -9,6 +9,14 @@ describe("materialKindFor", () => {
     expect(materialKindFor("Mesh_0014out")).toBe("mirror");
   });
 
+  it("窗上方那道白塑料横板换成有质感的白色木作", () => {
+    expect(materialKindFor("Mesh_0122out")).toBe("paintedTrim");
+  });
+
+  it("墙纸仍归墙纸，只叠凹凸，不整块换掉粉色云", () => {
+    expect(materialKindFor("Mesh_0115out")).toBe("wall");
+  });
+
   it("床、地板这些自带贴图的网格保持原样", () => {
     expect(materialKindFor("Mesh_0121out")).toBe("keep");
     expect(materialKindFor("Mesh_0140out")).toBe("keep");
