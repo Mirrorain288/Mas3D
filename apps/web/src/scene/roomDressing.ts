@@ -11,6 +11,17 @@ import * as THREE from "three";
  */
 export type RoomMaterialKind = "ceiling" | "paintedWhite" | "paintedTrim" | "wall" | "mirror" | "keep";
 
+/** 屋顶那块网格：斜屋面 + 四面墙下部 0.75 m 的墙裙都在这一个节点里（见 stripRoofSlope）。 */
+export const ROOF_MESH = "Mesh_0116out";
+/** 地板：平顶的水平范围与高度都从它的世界包围盒反推。 */
+export const FLOOR_MESH = "Mesh_0140out";
+/**
+ * 屋面三角形的判定线。实测（e2e/roof-split.mjs）：Mesh_0116out 共 22 个三角形，
+ * 14 个最高顶点 ≤ 0.75 m（四面墙的白色墙裙），8 个最低顶点 ≥ 2.92 m（两块坡面 + 屋脊）。
+ * 取中间值，两边都留足余量。
+ */
+export const ROOF_SLOPE_MIN_Y = 2.9;
+
 /**
  * 白模判定依据（把 glb 里的贴图抽出来逐张看过，.superpowers/room-tex/）：
  * Tex_0381_2 是三块横板接缝的近白图 → 屋顶；Tex_0084_0 是一张「白塑料板」
@@ -18,8 +29,8 @@ export type RoomMaterialKind = "ceiling" | "paintedWhite" | "paintedTrim" | "wal
  * 墙纸 Tex_0376_2 的粉色云与白色顶带是有画的，只是顶带太干净，配一层凹凸就够。
  */
 const KIND_BY_MESH: Readonly<Record<string, RoomMaterialKind>> = {
-  /** 斜屋顶（两块坡面 + 屋脊），原贴图接近纯白 */
-  Mesh_0116out: "ceiling",
+  /** 斜屋面（两块坡面 + 屋脊），原贴图接近纯白；同一个节点里还带着四面墙的墙裙 */
+  [ROOF_MESH]: "ceiling",
   /** 床右边那只小抽屉柜 */
   Mesh_0138out: "paintedWhite",
   /** 窗边墙上的四格置物架 */
@@ -39,7 +50,60 @@ export function materialKindFor(meshName: string): RoomMaterialKind {
 export interface RoomDressing {
   materials: THREE.Material[];
   textures: THREE.Texture[];
+  /** 换掉斜屋顶后补的那块平顶，没做平顶时为 null。 */
+  flatCeiling: FlatCeiling | null;
   dispose(): void;
+}
+
+/**
+ * 侧墙顶高。量出来的：Mesh_0115out 两侧长墙（|x| > 3.2）的最高顶点就是 3.00 m，
+ * 山墙往上继续升到 4.68 m 接屋脊。平天花板压在这条线上，接缝正好落在墙顶。
+ */
+export const EAVE_HEIGHT = 3.0;
+/** 平顶贴图的循环尺寸（米）：一块格子大约 0.75 m，和原来斜屋面的格子密度接近。 */
+export const CEILING_TILE_M = 0.75;
+
+export interface FlatCeilingLayout {
+  width: number;
+  depth: number;
+  centerX: number;
+  centerZ: number;
+  y: number;
+}
+
+export interface FlatCeiling {
+  mesh: THREE.Mesh;
+  layout: FlatCeilingLayout;
+}
+
+/**
+ * 平顶贴图的循环次数。抽成纯函数是为了让单测能钉死「轴序 + 数值」——
+ * 直接断言 geometry 的 uv 属性会写成一堆魔法数，断言函数自己算的值则是自证。
+ */
+export function flatCeilingUv(layout: FlatCeilingLayout): { repeatX: number; repeatY: number } {
+  return {
+    repeatX: layout.width / CEILING_TILE_M,
+    repeatY: layout.depth / CEILING_TILE_M,
+  };
+}
+
+/**
+ * 平顶的位置与尺寸：按地板的水平范围铺，四周各放出一点压进墙体，
+ * 高度压在侧墙顶（EAVE_HEIGHT）。抽成纯函数，单测里能直接钉住这些数。
+ */
+export function flatCeilingLayout(
+  min: Readonly<{ x: number; y: number; z: number }>,
+  max: Readonly<{ x: number; y: number; z: number }>,
+  eaveY: number = EAVE_HEIGHT,
+  margin = 0.06,
+): FlatCeilingLayout {
+  return {
+    width: Math.abs(max.x - min.x) + margin * 2,
+    depth: Math.abs(max.z - min.z) + margin * 2,
+    centerX: (min.x + max.x) / 2,
+    centerZ: (min.z + max.z) / 2,
+    y: eaveY,
+  };
 }
 
 async function loadTriple(base: string, repeatX: number, repeatY: number): Promise<{
@@ -171,14 +235,119 @@ export async function dressImportedRoom(room: THREE.Object3D): Promise<RoomDress
     }
   });
 
+  // 斜屋顶 → 平顶。材质沿用 ceilingMaterial，所以贴图/参数一处改两处生效。
+  const flatCeiling = buildFlatCeiling(room, ceilingMaterial);
+
   return {
     materials,
     textures,
+    flatCeiling,
     dispose(): void {
+      // 只摘掉自己加的平顶；共享的材质与纹理统一在下面释放。
+      flatCeiling?.mesh.removeFromParent();
+      flatCeiling?.mesh.geometry.dispose();
       for (const texture of textures) texture.dispose();
       for (const material of materials) material.dispose();
     },
   };
+}
+
+/**
+ * 只去掉屋顶节点里的**屋面**三角形，留下同一个节点里四面墙下部的墙裙。
+ *
+ * 之前这里写的是 roof.visible = false，连 0.75 m 高的白色墙裙一起没了
+ * （评审按 glb 顶点算的：22 个三角形里 14 个最高点 ≤ 0.75 m）。
+ * 现在按世界坐标逐三角形过滤，重新生成一份非索引几何，返回留下几个三角形。
+ */
+export function stripRoofSlope(roof: THREE.Mesh, maxY: number = ROOF_SLOPE_MIN_Y): number {
+  const geometry = roof.geometry;
+  const position = geometry.getAttribute("position");
+  if (!position) return 0;
+  roof.updateWorldMatrix(true, false);
+  const index = geometry.index;
+  const vertexCount = index ? index.count : position.count;
+  const vertexAt = (i: number): number => (index ? index.getX(i) : i);
+
+  const vertex = new THREE.Vector3();
+  const kept: number[] = [];
+  for (let i = 0; i + 2 < vertexCount; i += 3) {
+    let top = -Infinity;
+    for (let k = 0; k < 3; k += 1) {
+      vertex.fromBufferAttribute(position, vertexAt(i + k)).applyMatrix4(roof.matrixWorld);
+      top = Math.max(top, vertex.y);
+    }
+    if (top <= maxY) kept.push(vertexAt(i), vertexAt(i + 1), vertexAt(i + 2));
+  }
+  // 一个都不用去（比如换了一版素材），就别动几何。
+  if (kept.length >= vertexCount) return vertexCount / 3;
+
+  const next = new THREE.BufferGeometry();
+  for (const name of Object.keys(geometry.attributes)) {
+    const source = geometry.getAttribute(name) as THREE.BufferAttribute;
+    if ((source as unknown as { isInterleavedBufferAttribute?: boolean }).isInterleavedBufferAttribute) continue;
+    const out = new Float32Array(kept.length * source.itemSize);
+    let w = 0;
+    for (const vi of kept) {
+      const base = vi * source.itemSize;
+      for (let c = 0; c < source.itemSize; c += 1) out[w + c] = source.array[base + c] as number;
+      w += source.itemSize;
+    }
+    next.setAttribute(name, new THREE.BufferAttribute(out, source.itemSize, source.normalized));
+  }
+
+  geometry.dispose();
+  roof.geometry = next;
+  return kept.length / 3;
+}
+
+/**
+ * 把斜屋顶换成平顶。
+ *
+ * 原 glb 的屋面（Mesh_0116out）是两块坡面 + 屋脊，室内看是尖顶；这里去掉屋面三角形、
+ * 再按地板的水平范围补一块平天花板，材质沿用屋顶那套（用户要求天花板材质不变）。
+ * 山墙在 3.0 m 以上还剩一块三角，被平顶挡住，从室内看不到。
+ *
+ * 挂载点沿用 room.parent（导入后房间挂在 `root` 下、带 yaw 与位移），位置折回它的局部坐标。
+ * 注意：只折了平移、没折旋转 —— 现在唯一调用方 classroom.ts 给的是无旋转的 root；
+ * 将来把房间挂到带旋转的组下，这里要一起补四元数。
+ */
+export function buildFlatCeiling(
+  room: THREE.Object3D,
+  material: THREE.Material,
+): FlatCeiling | null {
+  const roof = room.getObjectByName(ROOF_MESH);
+  const floor = room.getObjectByName(FLOOR_MESH);
+  if (!floor) return null;
+
+  room.updateWorldMatrix(true, true);
+  const box = new THREE.Box3().setFromObject(floor);
+  if (box.isEmpty()) return null;
+  const layout = flatCeilingLayout(box.min, box.max);
+
+  const geometry = new THREE.PlaneGeometry(layout.width, layout.depth);
+  const uv = geometry.getAttribute("uv");
+  const { repeatX, repeatY } = flatCeilingUv(layout);
+  for (let i = 0; i < uv.count; i += 1) {
+    uv.setXY(i, uv.getX(i) * repeatX, uv.getY(i) * repeatY);
+  }
+  uv.needsUpdate = true;
+  // PlaneGeometry 默认躺在 XY 面朝 +Z，转成水平面；材质是 DoubleSide，朝上朝下都可见。
+  geometry.rotateX(-Math.PI / 2);
+
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.name = "flat-ceiling";
+  mesh.receiveShadow = true;
+
+  const parent = room.parent ?? room;
+  parent.updateWorldMatrix(true, false);
+  // 位置先按世界坐标算好，再折回挂载点的局部坐标 —— 房间自带旋转与位移。
+  mesh.position.copy(parent.worldToLocal(new THREE.Vector3(layout.centerX, layout.y, layout.centerZ)));
+  parent.add(mesh);
+
+  // 只去屋面，别整个节点关掉：同一个节点里还有四面墙的墙裙。
+  if (roof instanceof THREE.Mesh) stripRoofSlope(roof);
+
+  return { mesh, layout };
 }
 
 /** 地面世界高度（导入房间地板顶面，见 .superpowers 的包围盒探测）。 */
