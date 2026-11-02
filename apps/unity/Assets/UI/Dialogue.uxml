@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements" xsi="http://www.w3.org/2001/XMLSchema-instance" engine="UnityEngine.UIElements" editor="UnityEditor.UIElements" noNamespaceSchemaLocation="../../UIElementsSchema/UIElements.xsd" editor-extension-mode="False">
+    <Style src="Dialogue.uss" />
+    <ui:VisualElement name="panel" class="dialogue-panel">
+        <ui:VisualElement name="status-row" class="status-row">
+            <ui:VisualElement name="status-dot" class="status-dot" />
+            <ui:Label name="status" text="待机" class="status" />
+            <ui:VisualElement name="status-fill" class="status-fill" />
+            <ui:Button name="settings" text="设置" class="chip" />
+            <ui:Button name="export" text="导出" class="chip" />
+            <ui:Button name="clear" text="清空" class="chip" />
+        </ui:VisualElement>
+        <ui:ScrollView name="log" class="log">
+            <ui:Label name="thinking" text="她正在想…" class="line thinking" />
+        </ui:ScrollView>
+        <ui:VisualElement name="input-box" class="input-box">
+            <ui:TextField name="input" class="input" multiline="true" />
+            <ui:Label name="placeholder" text="和她说点什么（Enter 发送，Shift+Enter 换行）" class="placeholder" picking-mode="Ignore" />
+        </ui:VisualElement>
+        <ui:VisualElement name="footer" class="footer">
+            <ui:Label name="counter" text="0/300" class="counter" />
+            <ui:Button name="send" text="发送" class="send" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

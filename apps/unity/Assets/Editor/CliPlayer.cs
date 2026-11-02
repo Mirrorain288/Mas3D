@@ -1,7 +1,11 @@
 using System.IO;
+using Mas3D.Conversation;
+using Mas3D.Net;
+using Mas3D.UI;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.UIElements;
 #if MAS3D_URP
 using UnityEngine.Rendering.Universal;
 #endif
@@ -18,6 +22,8 @@ namespace Mas3D.Editor
         public const string ScenePath = "Assets/Scenes/Main.unity";
         public const string StreamingDir = "Assets/StreamingAssets/mas3d";
         public const string AnchorSource = "Anchors/anchors.json";
+        public const string PanelSettingsPath = "Assets/UI/DialoguePanelSettings.asset";
+        public const string DialogueTreePath = "Assets/UI/Dialogue.uxml";
 
         public static void BuildScene()
         {
@@ -56,6 +62,20 @@ namespace Mas3D.Editor
             boot.OutputCamera = camera;
             boot.SpawnAnchor = "A2";
 
+            // The panel and the bridge live on the same Session object as the bootstrap, so the
+            // scene is one self-contained object graph: the player builds nothing at runtime.
+            var dialogue = BuildDialogue();
+            var conversation = bootGo.AddComponent<ConversationController>();
+            conversation.Panel = dialogue;
+            var bridge = bootGo.AddComponent<DialogueBridge>();
+            bridge.Controller = conversation;
+            bridge.Panel = dialogue;
+
+            var tokenPath = BridgeSettings.TokenFilePath;
+            Debug.Log(File.Exists(tokenPath)
+                ? "[player] dialogue wired, token present at " + tokenPath
+                : "[player] dialogue wired, no token at " + tokenPath + " -> offline fallback copy");
+
             CopyAnchors();
 
             EditorSceneManager.MarkSceneDirty(scene);
@@ -63,6 +83,34 @@ namespace Mas3D.Editor
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };
             Debug.Log("[player] scene written: " + ScenePath);
             EditorApplication.Exit(0);
+        }
+
+        /// <summary>
+        /// The dialogue panel as the scene carries it: a UIDocument (uxml + panel settings) plus the
+        /// view component. The object starts inactive because UIDocument logs an error if it wakes
+        /// without settings, which is what this code is still in the middle of assigning.
+        /// </summary>
+        static DialoguePanel BuildDialogue()
+        {
+            var settings = AssetDatabase.LoadAssetAtPath<PanelSettings>(PanelSettingsPath);
+            var tree = AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(DialogueTreePath);
+            if (settings == null || tree == null)
+            {
+                Debug.LogError("[player] dialogue assets missing: " + PanelSettingsPath + " / " + DialogueTreePath);
+                EditorApplication.Exit(1);
+                return null;
+            }
+
+            var go = new GameObject("Dialogue");
+            go.SetActive(false);
+            var document = go.AddComponent<UIDocument>();
+            document.panelSettings = settings;
+            document.visualTreeAsset = tree;
+            var panel = go.AddComponent<DialoguePanel>();
+            panel.Document = document;
+            go.SetActive(true);
+            Debug.Log("[player] dialogue panel built: " + settings.name + " + " + tree.name);
+            return panel;
         }
 
         static GameObject BuildPlayer()

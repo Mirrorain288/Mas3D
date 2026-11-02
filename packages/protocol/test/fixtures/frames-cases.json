@@ -1,0 +1,595 @@
+{
+  "cases": [
+    {
+      "name": "ack minimal frame",
+      "ok": true,
+      "frame": {
+        "type": "ack",
+        "turnId": "t-ack"
+      }
+    },
+    {
+      "name": "thinking minimal frame",
+      "ok": true,
+      "frame": {
+        "type": "thinking",
+        "turnId": "t-thinking"
+      }
+    },
+    {
+      "name": "reply without cue or voice",
+      "ok": true,
+      "frame": {
+        "type": "reply",
+        "turnId": "t-reply-plain",
+        "text": "她坐在书桌前等你先开口。"
+      }
+    },
+    {
+      "name": "reply text that looks like an ISO timestamp",
+      "ok": true,
+      "frame": {
+        "type": "reply",
+        "turnId": "t-timestamp",
+        "text": "2026-11-02T20:13:58+08:00"
+      }
+    },
+    {
+      "name": "reply with a full cue",
+      "ok": true,
+      "frame": {
+        "type": "reply",
+        "turnId": "t-cue",
+        "text": "晚上好呀。",
+        "cue": {
+          "emotion": "joy",
+          "intensity": 0.6,
+          "gaze": "player",
+          "gesture": "wave"
+        }
+      }
+    },
+    {
+      "name": "reply with a full voice",
+      "ok": true,
+      "frame": {
+        "type": "reply",
+        "turnId": "t-voice",
+        "text": "晚上好呀。",
+        "voice": {
+          "audioUrl": "/mas3d/api/voice/v1/audio",
+          "durationMs": 1800,
+          "sentenceStartsMs": [
+            0,
+            720
+          ],
+          "englishText": "Good evening."
+        }
+      }
+    },
+    {
+      "name": "reply with cue and voice together",
+      "ok": true,
+      "frame": {
+        "type": "reply",
+        "turnId": "t-both",
+        "text": "嗯。",
+        "cue": {
+          "emotion": "neutral",
+          "intensity": 0,
+          "gaze": "up",
+          "gesture": "none"
+        },
+        "voice": {
+          "audioUrl": "/mas3d/api/voice/v1/audio",
+          "durationMs": 0,
+          "sentenceStartsMs": [
+            0
+          ],
+          "englishText": "Mm."
+        }
+      }
+    },
+    {
+      "name": "reply carrying an unknown field",
+      "ok": true,
+      "frame": {
+        "type": "reply",
+        "turnId": "t-extra",
+        "text": "嗯",
+        "unknownField": true
+      }
+    },
+    {
+      "name": "intent with a command plan",
+      "ok": true,
+      "frame": {
+        "type": "intent",
+        "turnId": "t-intent",
+        "plan": {
+          "base": {
+            "change": false,
+            "name": "坐姿待机",
+            "motion": 0,
+            "rest": true
+          },
+          "operation": "command",
+          "timing": "同时",
+          "intents": [
+            {
+              "key": "right-挥手打招呼",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "intent whose plan reply is null",
+      "ok": true,
+      "frame": {
+        "type": "intent",
+        "turnId": "t-intent-null-reply",
+        "plan": {
+          "base": {
+            "change": false,
+            "name": "坐姿待机",
+            "motion": 0,
+            "rest": true
+          },
+          "operation": "command",
+          "timing": "同时",
+          "intents": [
+            {
+              "key": "right-挥手打招呼",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": 0
+            }
+          ],
+          "reply": null
+        }
+      }
+    },
+    {
+      "name": "intent with a base change and no intents",
+      "ok": true,
+      "frame": {
+        "type": "intent",
+        "turnId": "t-intent-base",
+        "plan": {
+          "base": {
+            "change": true,
+            "name": "前倾",
+            "motion": 1,
+            "rest": false
+          },
+          "operation": "command",
+          "timing": "依次",
+          "intents": [],
+          "reply": "我凑近一点。"
+        }
+      }
+    },
+    {
+      "name": "error with a turnId and the timeout code",
+      "ok": true,
+      "frame": {
+        "type": "error",
+        "turnId": "t-timeout",
+        "code": "timeout",
+        "message": "等了太久，没有等到她的回应。"
+      }
+    },
+    {
+      "name": "error without a turnId",
+      "ok": true,
+      "frame": {
+        "type": "error",
+        "code": "bridge_down",
+        "message": "桥接没在跑。"
+      }
+    },
+    {
+      "name": "unknown frame type is rejected",
+      "ok": false,
+      "error": "unknown frame type: pause",
+      "frame": {
+        "type": "pause",
+        "turnId": "t-pause"
+      }
+    },
+    {
+      "name": "ack without turnId is rejected",
+      "ok": false,
+      "error": "ack.turnId must be a string",
+      "frame": {
+        "type": "ack"
+      }
+    },
+    {
+      "name": "cue intensity above range is rejected",
+      "ok": false,
+      "error": "cue.intensity must be within 0..1",
+      "frame": {
+        "type": "reply",
+        "turnId": "t-cue-hot",
+        "text": "太开心了。",
+        "cue": {
+          "emotion": "joy",
+          "intensity": 1.5,
+          "gaze": "player",
+          "gesture": "wave"
+        }
+      }
+    },
+    {
+      "name": "cue without gesture is rejected",
+      "ok": false,
+      "error": "cue.gesture is not one of none|nod|shake|tilt|wave|lean_in|look_away",
+      "frame": {
+        "type": "reply",
+        "turnId": "t-cue-partial",
+        "text": "嗯。",
+        "cue": {
+          "emotion": "joy",
+          "intensity": 0.4,
+          "gaze": "player"
+        }
+      }
+    },
+    {
+      "name": "cue that is not an object is rejected",
+      "ok": false,
+      "error": "cue must be an object",
+      "frame": {
+        "type": "reply",
+        "turnId": "t-cue-null",
+        "text": "嗯。",
+        "cue": null
+      }
+    },
+    {
+      "name": "plan with unknown timing is rejected",
+      "ok": false,
+      "error": "plan.timing must be 同时 or 依次",
+      "frame": {
+        "type": "intent",
+        "turnId": "t-timing",
+        "plan": {
+          "base": {
+            "change": false,
+            "name": "坐姿待机",
+            "motion": 0,
+            "rest": true
+          },
+          "operation": "command",
+          "timing": "并行",
+          "intents": [
+            {
+              "key": "right-挥手打招呼",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "command plan without intent or base change is rejected",
+      "ok": false,
+      "error": "a command plan needs at least one intent or a base change",
+      "frame": {
+        "type": "intent",
+        "turnId": "t-empty-command",
+        "plan": {
+          "base": {
+            "change": false,
+            "name": "坐姿待机",
+            "motion": 0,
+            "rest": true
+          },
+          "operation": "command",
+          "timing": "同时",
+          "intents": []
+        }
+      }
+    },
+    {
+      "name": "error with an unknown code is rejected",
+      "ok": false,
+      "error": "error.code is not one of bridge_down|timeout|model_error|bad_request|rate_limited",
+      "frame": {
+        "type": "error",
+        "code": "weird",
+        "message": "嗯？"
+      }
+    },
+    {
+      "name": "voice with a negative duration is rejected",
+      "ok": false,
+      "error": "voice.durationMs must be a non-negative number",
+      "frame": {
+        "type": "reply",
+        "turnId": "t-voice-negative",
+        "text": "嗯。",
+        "voice": {
+          "audioUrl": "/mas3d/api/voice/v1/audio",
+          "durationMs": -1,
+          "sentenceStartsMs": [
+            0
+          ],
+          "englishText": "Mm."
+        }
+      }
+    },
+    {
+      "name": "intent without a plan is rejected",
+      "ok": false,
+      "error": "plan must be an object",
+      "frame": {
+        "type": "intent",
+        "turnId": "t-no-plan"
+      }
+    },
+    {
+      "name": "plan with more than four intents is rejected",
+      "ok": false,
+      "error": "plan.intents must have at most 4 entries",
+      "frame": {
+        "type": "intent",
+        "turnId": "t-intents-count",
+        "plan": {
+          "base": {
+            "change": false,
+            "name": "坐姿待机",
+            "motion": 0,
+            "rest": true
+          },
+          "operation": "command",
+          "timing": "同时",
+          "intents": [
+            {
+              "key": "来一个动作1",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": 0
+            },
+            {
+              "key": "来一个动作2",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": 0
+            },
+            {
+              "key": "来一个动作3",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": 0
+            },
+            {
+              "key": "来一个动作4",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": 0
+            },
+            {
+              "key": "来一个动作5",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "base name longer than 40 characters is rejected",
+      "ok": false,
+      "error": "base.name must be at most 40 characters",
+      "frame": {
+        "type": "intent",
+        "turnId": "t-base-name",
+        "plan": {
+          "base": {
+            "change": true,
+            "name": "ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMNO",
+            "motion": 1,
+            "rest": false
+          },
+          "operation": "command",
+          "timing": "同时",
+          "intents": [
+            {
+              "key": "right-挥手打招呼",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "plan reply longer than 600 characters is rejected",
+      "ok": false,
+      "error": "plan.reply must be at most 600 characters",
+      "frame": {
+        "type": "intent",
+        "turnId": "t-reply-long",
+        "plan": {
+          "base": {
+            "change": false,
+            "name": "坐姿待机",
+            "motion": 0,
+            "rest": true
+          },
+          "operation": "command",
+          "timing": "同时",
+          "intents": [
+            {
+              "key": "right-挥手打招呼",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": 0
+            }
+          ],
+          "reply": "rrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrrr"
+        }
+      }
+    },
+    {
+      "name": "chat plan carrying an intent is rejected",
+      "ok": false,
+      "error": "chat plan must not carry intents",
+      "frame": {
+        "type": "intent",
+        "turnId": "t-chat-intent",
+        "plan": {
+          "base": {
+            "change": false,
+            "name": "坐姿待机",
+            "motion": 0,
+            "rest": true
+          },
+          "operation": "chat",
+          "timing": "同时",
+          "intents": [
+            {
+              "key": "right-挥手打招呼",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "intent speed above range is rejected",
+      "ok": false,
+      "error": "intents[0].speed must be within 0.4..2",
+      "frame": {
+        "type": "intent",
+        "turnId": "t-speed",
+        "plan": {
+          "base": {
+            "change": false,
+            "name": "坐姿待机",
+            "motion": 0,
+            "rest": true
+          },
+          "operation": "command",
+          "timing": "同时",
+          "intents": [
+            {
+              "key": "right-挥手打招呼",
+              "speed": 2.5,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "intent strength above range is rejected",
+      "ok": false,
+      "error": "intents[0].strength must be within 0..1",
+      "frame": {
+        "type": "intent",
+        "turnId": "t-strength",
+        "plan": {
+          "base": {
+            "change": false,
+            "name": "坐姿待机",
+            "motion": 0,
+            "rest": true
+          },
+          "operation": "command",
+          "timing": "同时",
+          "intents": [
+            {
+              "key": "right-挥手打招呼",
+              "speed": 1,
+              "strength": 1.5,
+              "hold": 2,
+              "delay": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "intent hold above range is rejected",
+      "ok": false,
+      "error": "intents[0].hold must be within 0..20",
+      "frame": {
+        "type": "intent",
+        "turnId": "t-hold",
+        "plan": {
+          "base": {
+            "change": false,
+            "name": "坐姿待机",
+            "motion": 0,
+            "rest": true
+          },
+          "operation": "command",
+          "timing": "同时",
+          "intents": [
+            {
+              "key": "right-挥手打招呼",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 21,
+              "delay": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "intent delay below range is rejected",
+      "ok": false,
+      "error": "intents[0].delay must be within 0..30",
+      "frame": {
+        "type": "intent",
+        "turnId": "t-delay",
+        "plan": {
+          "base": {
+            "change": false,
+            "name": "坐姿待机",
+            "motion": 0,
+            "rest": true
+          },
+          "operation": "command",
+          "timing": "同时",
+          "intents": [
+            {
+              "key": "right-挥手打招呼",
+              "speed": 1,
+              "strength": 0.8,
+              "hold": 2,
+              "delay": -1
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
