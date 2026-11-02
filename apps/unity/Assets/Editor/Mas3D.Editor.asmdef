@@ -3,7 +3,9 @@
   "rootNamespace": "Mas3D.Editor",
   "references": [
     "Unity.RenderPipelines.Core.Runtime",
-    "Unity.RenderPipelines.Universal.Runtime"
+    "Unity.RenderPipelines.Universal.Runtime",
+    "Unity.Cinemachine",
+    "Mas3D.Runtime"
   ],
   "includePlatforms": [
     "Editor"

@@ -14,13 +14,15 @@
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 selfcheck
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 scene
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 anchors
+  powershell -ExecutionPolicy Bypass -File tools/unity.ps1 player
+  powershell -ExecutionPolicy Bypass -File tools/unity.ps1 capture
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 test -Mode PlayMode
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 build -Out build/Mas3D.exe
 #>
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('status', 'editors', 'license', 'open', 'selfcheck', 'urp', 'scene', 'anchors', 'test', 'build', 'run')]
+    [ValidateSet('status', 'editors', 'license', 'open', 'selfcheck', 'urp', 'scene', 'anchors', 'player', 'capture', 'test', 'build', 'run')]
     [string]$Action = 'status',
 
     [ValidateSet('EditMode', 'PlayMode')]
@@ -62,7 +64,7 @@ function Invoke-Unity {
 # Batch step: run the project with -executeMethod; the CLI finds the editor and
 # tails its own log, so we redirect Unity's log to a file and print only the tail.
 function Invoke-Batch {
-    param([string] $Method, [string[]] $Extra = @())
+    param([string] $Method, [string[]] $Extra = @(), [switch] $Gpu)
     $logDir = Join-Path $project 'Logs'
     New-Item -ItemType Directory -Force -Path $logDir | Out-Null
     $logName = ($Method -split '\.')[-1]
@@ -72,7 +74,10 @@ function Invoke-Batch {
     # unity run already adds -batchmode/-quit; only editor-side flags go after --.
     # Keep -executeMethod first: the CLI drops it when -nographics leads the tail.
     $cliArgs += '--'
-    $cliArgs += @('-executeMethod', $Method, '-nographics', '-logFile', $logPath)
+    $cliArgs += @('-executeMethod', $Method)
+    # screenshots need the GPU; every other batch step runs headless
+    if (-not $Gpu) { $cliArgs += '-nographics' }
+    $cliArgs += @('-logFile', $logPath)
     $cliArgs += $Extra
     $consoleLog = Join-Path $logDir ("cli-{0}.stdout.txt" -f $logName)
     Invoke-Unity -CliArgs $cliArgs -ConsoleLog $consoleLog
@@ -98,6 +103,10 @@ switch ($Action) {
     'scene'     { Invoke-Batch 'Mas3D.Editor.CliSteps.CreateMainScene' }
     # room anchors solved from measured geometry (see spec 5.17)
     'anchors'   { Invoke-Batch 'Mas3D.Editor.CliAnchors.Solve' }
+    # playable scene: dressed room + CharacterController player + Cinemachine camera
+    'player'    { Invoke-Batch 'Mas3D.Editor.CliPlayer.BuildScene' }
+    # four third-person stills of the playable scene (GPU required, no -nographics)
+    'capture'   { Invoke-Batch 'Mas3D.Editor.CliPlayer.Capture' -Gpu }
     'test'      {
         $results = Join-Path $project "TestResults/$Mode.xml"
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $results) | Out-Null

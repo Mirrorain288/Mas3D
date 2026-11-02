@@ -3,7 +3,8 @@
     "rootNamespace": "Mas3D.Tests",
     "references": [
         "UnityEngine.TestRunner",
-        "UnityEditor.TestRunner"
+        "UnityEditor.TestRunner",
+        "Mas3D.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
