@@ -142,6 +142,16 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
       - **验证已落地（第 115 行 ①②③ 的第①条 + 落座）**：`Assets/Tests/PlayMode/RoomAnchorTests.cs`，跑法 `tools/unity.ps1 test -Mode PlayMode`。测试实例化房间、给每个 `MeshFilter` 挂非凸 `MeshCollider`（实测 **33 个**），再对每个锚点做 `Physics.OverlapCapsuleNonAlloc`（站姿 r = 0.30 / h = 1.70，从 y = 0.32 到 1.40），断言除地板外无命中；落座槽位按 r = 0.22、从座面 + 0.10 到 + 0.72 断言。当前 **2/2 通过**。
       - 测试逼出两条真实约束，写进判据：①**地面覆盖不算障碍**——地毯等高度 ≤ 0.07 m 的饰件允许被踩（求解器同规则），否则 A3 会误报命中 `Mesh_0126out`；②**坐姿胶囊半径只能是 0.22**——长凳座面中心 (0.10, −0.02) 离床体 `Mesh_0121out` 边界仅 0.25 m，用站姿 0.30 会顶进床沿，这是几何事实不是调容差。
 
+18. **P2 可玩场景（2026-11-02 实测，已跑通）**：房间 + 玩家 + 第三人称相机进了 `Assets/Scenes/Main.unity`，一条命令重建、一条命令出图。
+    - 生成：`tools/unity.ps1 player`（`Mas3D.Editor.CliPlayer.BuildScene`）—— 装房间、按包围盒归零（与 `CliAnchors` 同一套归零，否则锚点全偏）、换自有材质、平顶、布光、夜空卡片、玩家与相机，并把 `Anchors/anchors.json` 复制到 `Assets/StreamingAssets/mas3d/`。实测日志：`[rebuild] … renderers=33 unresolved=0`、`[dress] lights moon=1.2 lamp=1.2 glow=2 eaveY=3.00`、`[player] materials=33 eave=3.00`、`[player] scene written`。
+    - 出图：`tools/unity.ps1 capture`（`Mas3D.Editor.CliPlayer.Capture`，**必须带 GPU，不加 -nographics**）—— 四个朝向 1280×720 存 `apps/unity/Shots/play-01..04.png`。非 play mode 下靠 `CinemachineBrain.ManualUpdate()`（Cinemachine 3.6+）推进再 `Camera.Render()`。
+    - 玩家：胶囊 r = 0.30 / h = 1.70、眼高 1.62、走 2.0 m/s / 跑 3.4 m/s、加速度 18、重力 −20、转向 720°/s；出生 `SpawnLift = 0.10`（地板顶面 y ≈ 0.04，按 0.03 生会让胶囊陷进地板，**陷进去的 CharacterController 永远报 isGrounded = false**）。
+    - 相机：`CinemachineThirdPersonFollow`，距离 2.8 m、肩偏 (0.28, 0, 0)、fov 55、near 0.05、避障半径 0.20（`IgnoreTag "Player"`）；默认俯角 14°，在 A2 出生点相机落在 y ≈ 2.57。
+    - **外壳碰撞必须反向**：导入的外壳是朝外的闭合盒，非凸 `MeshCollider` 对 CharacterController 的 sweep 是单面的，直接挂会让玩家穿过地板和墙。`Assets/Scripts/RoomColliders.cs` 给墙/屋面/地板三个外壳网格生成反绕序（每个三角形交换 0/2 顶点）的 `inner-collider` 子物体，家具只留单面。实测「从 A2 向北撞墙」停在 z = 2.94，证明反向 collider 生效。
+    - **着色器全局必须每进程重设**：房间着色器自己乘 `_RoomExposure` / `_RoomSaturation`（`RoomSurface.shader:103`、`RoomMirror.shader:77`），这两个是 `Shader.SetGlobalFloat` 全局，**不随场景保存**，默认 0 会把室内乘成纯黑，只剩 unlit 的夜空卡片可见。`Assets/Scripts/RoomLook.cs` 在 `RoomBootstrap.Boot()` 里先 `RoomLook.Apply()`（postExposure −1.2、saturation 60，与 `RoomDress.Tuning` 镜像）。
+    - **编辑器工具里 Awake 不跑**：`PlayerMotor` 的控制器配置与 Head 创建放在幂等的 `EnsureReady()`，`Awake` 只转发；`RoomBootstrap.Boot()` 显式调用，否则无头截图时眼高取空、相机贴地。
+    - 验收：`tools/unity.ps1 test -Mode PlayMode` **6/6 通过**（`PlayerWalkTests.cs`：A2→A3 两段步行无侵入、相机不出外壳不穿墙、每个锚点落在地面、撞墙不穿透）。
+
 ## 6. 四件动作的验收判据（可测，不靠肉眼）
 
 | 动作 | 判据 |
