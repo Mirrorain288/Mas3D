@@ -1,0 +1,45 @@
+# Unity generated
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+/[Rr]ecordings/
+
+# IDE / solution files Unity regenerates
+*.csproj
+*.unityproj
+*.sln
+*.suo
+*.user
+*.userprefs
+*.pidb
+*.booproj
+*.svd
+*.pdb
+*.mdb
+*.opendb
+*.VC.db
+.vs/
+.idea/
+
+# Crash reports
+sysinfo.txt
+crashlytics-build.properties
+
+# Local-only assets: ripped room, exported FBX, voice samples, tokens
+/Assets/_Local/
+/Assets/_Local.meta
+*.glb
+*.gltf
+*.bin
+
+# Build output
+/TestResults/
+/Recordings/
+
+# Rendered evidence: regenerate with tools/unity.ps1 run / tools/anchor-shots.ps1
+/Shots/

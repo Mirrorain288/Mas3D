@@ -1,0 +1,25 @@
+{
+  "name": "Mas3D.Editor",
+  "rootNamespace": "Mas3D.Editor",
+  "references": [
+    "Unity.RenderPipelines.Core.Runtime",
+    "Unity.RenderPipelines.Universal.Runtime"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [
+    {
+      "name": "com.unity.render-pipelines.universal",
+      "expression": "1.0.0",
+      "define": "MAS3D_URP"
+    }
+  ],
+  "noEngineReferences": false
+}
