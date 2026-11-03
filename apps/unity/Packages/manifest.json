@@ -1,4 +1,13 @@
 {
+  "scopedRegistries": [
+    {
+      "name": "OpenUPM",
+      "url": "https://package.openupm.com",
+      "scopes": [
+        "com.vrmc"
+      ]
+    }
+  ],
   "dependencies": {
     "com.unity.cinemachine": "6.6.0",
     "com.unity.cloud.gltfast": "6.20.0",
@@ -41,6 +50,7 @@
     "com.unity.modules.video": "1.0.0",
     "com.unity.modules.wind": "1.0.0",
     "com.unity.modules.xr": "1.0.0",
-    "com.unity.nuget.newtonsoft-json": "file:com.unity.nuget.newtonsoft-json-3.2.1.tgz"
+    "com.unity.nuget.newtonsoft-json": "file:com.unity.nuget.newtonsoft-json-3.2.1.tgz",
+    "com.vrmc.vrm": "0.131.4"
   }
 }
