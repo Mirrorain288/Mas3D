@@ -519,7 +519,7 @@ namespace Mas3D.Editor
             var moon = moonGo.AddComponent<Light>();
             moon.type = LightType.Directional;
             moon.color = Hex(0xbcd6ff);
-            moon.intensity = tuning.moon;
+            moon.intensity = RoomLook.Scale(tuning.moon);
             moon.shadows = tuning.moonShadows ? LightShadows.Soft : LightShadows.None;
             moon.shadowStrength = 0.85f;
             moon.shadowBias = tuning.shadowBias;
@@ -531,7 +531,7 @@ namespace Mas3D.Editor
             var lamp = lampGo.AddComponent<Light>();
             lamp.type = LightType.Point;
             lamp.color = Hex(0xffb877);
-            lamp.intensity = tuning.lamp;
+            lamp.intensity = RoomLook.Scale(tuning.lamp);
             lamp.range = 6f;
             lamp.shadows = LightShadows.None;
 
@@ -551,7 +551,7 @@ namespace Mas3D.Editor
                 var light = glowGo.AddComponent<Light>();
                 light.type = LightType.Point;
                 light.color = Hex(0xffdcb8);
-                light.intensity = tuning.glow;
+                light.intensity = RoomLook.Scale(tuning.glow);
                 light.range = 13f;
                 light.shadows = LightShadows.None;
                 if (glow == null) glow = light;
@@ -566,7 +566,7 @@ namespace Mas3D.Editor
             var floorLight = floorGo.AddComponent<Light>();
             floorLight.type = LightType.Point;
             floorLight.color = Hex(0xffe6cc);
-            floorLight.intensity = tuning.floorBounce;
+            floorLight.intensity = RoomLook.Scale(tuning.floorBounce);
             floorLight.range = 8.5f;
             floorLight.shadows = LightShadows.None;
 
@@ -576,13 +576,15 @@ namespace Mas3D.Editor
             var fill = fillGo.AddComponent<Light>();
             fill.type = LightType.Directional;
             fill.color = Hex(0x8fa6d8);
-            fill.intensity = tuning.bounce;
+            fill.intensity = RoomLook.Scale(tuning.bounce);
             fill.shadows = LightShadows.None;
 
             RenderSettings.ambientMode = UnityEngine.Rendering.AmbientMode.Trilight;
-            RenderSettings.ambientSkyColor = Hex(0x565a78);
-            RenderSettings.ambientEquatorColor = Hex(0x5a4148);
-            RenderSettings.ambientGroundColor = Hex(0x2b2130);
+            // The ambient probe lights the avatar through SH, so it has to take the same
+            // scale as the lamps; the room exposure compensates for it below.
+            RenderSettings.ambientSkyColor = RoomLook.Scale(Hex(0x565a78));
+            RenderSettings.ambientEquatorColor = RoomLook.Scale(Hex(0x5a4148));
+            RenderSettings.ambientGroundColor = RoomLook.Scale(Hex(0x2b2130));
             RenderSettings.fog = false;
 
             _moon = moon;
@@ -601,9 +603,9 @@ namespace Mas3D.Editor
         /// </summary>
         public static void ApplyColour(Tuning tuning)
         {
-            Shader.SetGlobalFloat("_RoomExposure", Mathf.Pow(2f, tuning.postExposure));
+            Shader.SetGlobalFloat("_RoomExposure", RoomLook.Exposure(tuning.postExposure));
             Shader.SetGlobalFloat("_RoomSaturation", Mathf.Clamp01(1f + tuning.saturation / 100f));
-            Debug.Log($"[dress] colour exposure={tuning.postExposure} curve={Mathf.Pow(2f, tuning.postExposure):F2} saturation={tuning.saturation}");
+            Debug.Log($"[dress] colour exposure={tuning.postExposure} curve={RoomLook.Exposure(tuning.postExposure):F2} lightScale={RoomLook.LightScale:F2} saturation={tuning.saturation}");
         }
 
         public const string SkyPath = "Assets/_Local/sky/night-sky-2k.jpg";
@@ -689,16 +691,16 @@ namespace Mas3D.Editor
         {
             if (_moon != null)
             {
-                _moon.intensity = t.moon;
+                _moon.intensity = RoomLook.Scale(t.moon);
                 _moon.shadows = t.moonShadows ? LightShadows.Soft : LightShadows.None;
                 _moon.shadowBias = t.shadowBias;
                 _moon.shadowNormalBias = t.shadowNormalBias;
             }
-            if (_lamp != null) _lamp.intensity = t.lamp;
-            if (_glow != null) _glow.intensity = t.glow;
-            foreach (var extra in _glows) extra.intensity = t.glow;
-            if (_fill != null) _fill.intensity = t.bounce;
-            if (_floor != null) _floor.intensity = t.floorBounce;
+            if (_lamp != null) _lamp.intensity = RoomLook.Scale(t.lamp);
+            if (_glow != null) _glow.intensity = RoomLook.Scale(t.glow);
+            foreach (var extra in _glows) extra.intensity = RoomLook.Scale(t.glow);
+            if (_fill != null) _fill.intensity = RoomLook.Scale(t.bounce);
+            if (_floor != null) _floor.intensity = RoomLook.Scale(t.floorBounce);
             ApplyColour(t);
         }
 

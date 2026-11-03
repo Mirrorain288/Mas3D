@@ -15,6 +15,7 @@
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 scene
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 anchors
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 player
+  powershell -ExecutionPolicy Bypass -File tools/unity.ps1 avatarpose
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 capture
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 test -Mode PlayMode
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 build -Out build/Mas3D.exe
@@ -22,7 +23,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('status', 'editors', 'license', 'open', 'selfcheck', 'urp', 'scene', 'anchors', 'player', 'capture', 'test', 'smoke', 'build', 'run')]
+    [ValidateSet('status', 'editors', 'license', 'open', 'selfcheck', 'urp', 'scene', 'anchors', 'player', 'avatarpose', 'capture', 'test', 'smoke', 'build', 'run')]
     [string]$Action = 'status',
 
     [ValidateSet('EditMode', 'PlayMode')]
@@ -105,6 +106,8 @@ switch ($Action) {
     'anchors'   { Invoke-Batch 'Mas3D.Editor.CliAnchors.Solve' }
     # playable scene: dressed room + CharacterController player + Cinemachine camera
     'player'    { Invoke-Batch 'Mas3D.Editor.CliPlayer.BuildScene' }
+    # Avatar sitting pose: front and side stills under Shots plus the hip/knee numbers (GPU required)
+    'avatarpose' { Invoke-Batch 'Mas3D.Editor.CliAvatarPose.Probe' -Gpu }
     # Four third-person stills of the playable scene, then one PlayMode still that includes the
     # dialogue panel (GPU required, no -nographics). The batch path renders with camera.Render(),
     # which cannot see UI Toolkit overlays, so the panel shot runs through the test runner.

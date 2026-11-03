@@ -2,7 +2,9 @@
     "name": "Mas3D.Runtime",
     "rootNamespace": "Mas3D",
     "references": [
-        "Unity.Cinemachine"
+        "Unity.Cinemachine",
+        "VRM10",
+        "UniHumanoid"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

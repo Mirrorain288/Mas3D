@@ -4,7 +4,8 @@
     "references": [
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner",
-        "Mas3D.Runtime"
+        "Mas3D.Runtime",
+        "VRM10"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

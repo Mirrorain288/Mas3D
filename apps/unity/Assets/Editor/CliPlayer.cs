@@ -1,4 +1,6 @@
 using System.IO;
+using System.Linq;
+using Mas3D.Avatar;
 using Mas3D.Conversation;
 using Mas3D.Net;
 using Mas3D.UI;
@@ -70,6 +72,7 @@ namespace Mas3D.Editor
             var bridge = bootGo.AddComponent<DialogueBridge>();
             bridge.Controller = conversation;
             bridge.Panel = dialogue;
+            boot.Dialogue = conversation;
 
             var tokenPath = BridgeSettings.TokenFilePath;
             Debug.Log(File.Exists(tokenPath)
@@ -77,6 +80,55 @@ namespace Mas3D.Editor
                 : "[player] dialogue wired, no token at " + tokenPath + " -> offline fallback copy");
 
             CopyAnchors();
+
+            // She is scene geometry, not a runtime spawn: the Actors object is empty at play time and
+            // only exists so the hierarchy reads as a room with people in it. Anchors first, because
+            // SitAt reads the seat off the streaming copy.
+            var actors = new GameObject("Actors");
+            var actor = AvatarActor.Spawn();
+            if (actor == null)
+            {
+                Debug.LogError("[player] avatar spawn failed: " + AvatarRig.DefaultPrefabPath);
+                EditorApplication.Exit(1);
+                return;
+            }
+            actor.transform.SetParent(actors.transform, true);
+
+            var table = AnchorTable.Load();
+            var seat = table != null ? table.Seat(AvatarActor.DefaultSeatId) : null;
+            if (seat == null)
+            {
+                Debug.LogError("[player] no " + AvatarActor.DefaultSeatId + " in the anchor table");
+                EditorApplication.Exit(1);
+                return;
+            }
+
+            // Judge the seat by the hips joint, never by the root: sitting drops the root below the
+            // floor plate, so a root-height check would pass while she floats or sinks.
+            var hips = actor.Seat.HipsWorld.y;
+            var want = seat.y + AvatarSeat.HipsGap;
+            if (Mathf.Abs(hips - want) > 0.02f)
+            {
+                Debug.LogError(string.Format("[player] seat missed on {0}: hips={1:F3} want={2:F3}", seat.id, hips, want));
+                EditorApplication.Exit(1);
+                return;
+            }
+            boot.Actor = actor;
+            Debug.Log(string.Format("[player] actor seated on {0}: hips={1:F3} seat.y={2:F3} gap={3:F3}", seat.id, hips, seat.y, AvatarSeat.HipsGap));
+
+            // Save her at rest, not seated: AvatarSeat.Seated is runtime-only, and applying the
+            // sitting table to an already-saved sitting pose would fold the legs twice (AvatarPose
+            // caches the first pose it sees as the rest pose). AvatarActor.Start seats her on load.
+            var park = table.Anchor("A5");
+            if (park == null)
+            {
+                Debug.LogError("[player] no A5 in the anchor table, cannot park the actor at rest");
+                EditorApplication.Exit(1);
+                return;
+            }
+            actor.Seat.Stand(park.Feet(), park.facingY);
+            actor.FitBody();
+            Debug.Log(string.Format("[player] actor parked at rest on A5 ({0:F2}, {1:F2}), seats herself on {2}", park.x, park.z, actor.SeatId));
 
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, ScenePath);
@@ -204,10 +256,46 @@ namespace Mas3D.Editor
             var brain = camera.GetComponent<Unity.Cinemachine.CinemachineBrain>();
             if (brain == null) brain = camera.gameObject.AddComponent<Unity.Cinemachine.CinemachineBrain>();
 
+            // The scene stores her at rest (AvatarSeat.Seated does not survive serialisation, so the
+            // sitting pose is applied on load); an editor-side render has no Awake, so seat her here.
+            var avatar = Object.FindAnyObjectByType<AvatarActor>();
+            if (avatar != null) avatar.SitAt(avatar.SeatId);
+
             var shotDir = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "Shots"));
             Directory.CreateDirectory(shotDir);
             var target = new RenderTexture(1280, 720, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
             camera.targetTexture = target;
+
+            // `-diagLights 1` renders the spawn view once per light group with that group off, so a
+            // colour that only shows up from one side can be traced to the lamp responsible instead
+            // of guessed at. Diagnostic only; the five delivery shots are written afterwards.
+            if (HasFlag("-diagLights"))
+            {
+                var groups = new (string name, string[] objects)[]
+                {
+                    ("moon", new[] { "moon" }),
+                    ("lamp", new[] { "bedside-lamp" }),
+                    ("glow", new[] { "ceiling-glow-1", "ceiling-glow-2" }),
+                    ("floor", new[] { "floor-bounce" }),
+                    ("bounce", new[] { "bounce" }),
+                };
+
+                var all = Object.FindObjectsByType<Light>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+                var names = string.Join(",", all.Select(l => l.name + "=" + l.intensity.ToString("F2")));
+                Debug.Log("[play] lights " + names);
+
+                rig.SetOrbit(86f, 14f);
+                brain.ManualUpdate();
+                foreach (var group in groups)
+                {
+                    var off = all.Where(l => group.objects.Any(n => l.name.StartsWith(n))).ToArray();
+                    foreach (var light in off) light.enabled = false;
+                    camera.Render();
+                    WriteShot(target, Path.Combine(shotDir, "diag-off-" + group.name + ".png"));
+                    foreach (var light in off) light.enabled = true;
+                    Debug.Log("[play] diag off " + group.name + " (" + off.Length + " lights)");
+                }
+            }
 
             // One view from the spawn anchor, then quarter turns so the framing and the obstacle
             // avoidance can both be judged.
@@ -218,17 +306,41 @@ namespace Mas3D.Editor
                 brain.ManualUpdate();
                 camera.Render();
 
-                RenderTexture.active = target;
-                var texture = new Texture2D(target.width, target.height, TextureFormat.RGB24, false);
-                texture.ReadPixels(new Rect(0, 0, target.width, target.height), 0, 0);
-                texture.Apply();
-                RenderTexture.active = null;
-
                 var file = Path.Combine(shotDir, "play-0" + (i + 1) + ".png");
-                File.WriteAllBytes(file, texture.EncodeToPNG());
-                Object.DestroyImmediate(texture);
+                WriteShot(target, file);
                 var eye = boot.Player != null && boot.Player.Head != null ? boot.Player.Head.position.ToString("F2") : "-";
                 Debug.Log(string.Format("[play] wrote {0} cam={1:F2} eye={2}", file, camera.transform.position, eye));
+            }
+
+            // Fifth shot: her on the bench, 2.4 m forward, 1.1 m to her right and 1.35 m up, fov 38,
+            // so the seat depth, the legs and the arm clearance can all be judged from one picture.
+            var table = AnchorTable.Load();
+            var seat = table != null ? table.Seat(AvatarActor.DefaultSeatId) : null;
+            if (seat == null)
+            {
+                Debug.LogWarning("[play] no " + AvatarActor.DefaultSeatId + " in the anchor table, avatar shot skipped");
+            }
+            else
+            {
+                // Cinemachine owns the camera in play; a manual pose means it has to let go first.
+                brain.enabled = false;
+                var facing = Quaternion.Euler(0f, seat.facingY, 0f);
+                var forward = facing * Vector3.forward;
+                var right = facing * Vector3.right;
+                var seatPoint = new Vector3(seat.x, seat.y, seat.z);
+
+                // Three-quarter from her front (she faces -X, so the camera sits in front and to her
+                // right): a straight front view hides the seat depth, a side view hides the arms.
+                var eye = seatPoint + forward * 2.4f + right * 1.1f + Vector3.up * 1.35f;
+                var lookAt = seatPoint + Vector3.up * 0.37f;
+                camera.fieldOfView = 38f;
+                camera.transform.position = eye;
+                camera.transform.rotation = Quaternion.LookRotation(lookAt - eye, Vector3.up);
+                camera.Render();
+
+                var file = Path.Combine(shotDir, "avatar-seated.png");
+                WriteShot(target, file);
+                Debug.Log(string.Format("[play] wrote {0} fov={1:F0} eye={2} look={3}", file, camera.fieldOfView, eye.ToString("F2"), lookAt.ToString("F2")));
             }
 
             camera.targetTexture = null;
@@ -236,6 +348,21 @@ namespace Mas3D.Editor
             Object.DestroyImmediate(target);
             EditorApplication.Exit(0);
         }
+
+        /// <summary>Reads the target back and writes it as a PNG.</summary>
+        static void WriteShot(RenderTexture target, string path)
+        {
+            RenderTexture.active = target;
+            var texture = new Texture2D(target.width, target.height, TextureFormat.RGB24, false);
+            texture.ReadPixels(new Rect(0, 0, target.width, target.height), 0, 0);
+            texture.Apply();
+            RenderTexture.active = null;
+            File.WriteAllBytes(path, texture.EncodeToPNG());
+            Object.DestroyImmediate(texture);
+        }
+
+        static bool HasFlag(string flag) =>
+            System.Environment.GetCommandLineArgs().Any(a => string.Equals(a, flag, System.StringComparison.OrdinalIgnoreCase));
 
         static Bounds Measure(GameObject root)
         {
