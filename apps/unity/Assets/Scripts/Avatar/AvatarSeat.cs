@@ -1,3 +1,4 @@
+using System.Text;
 using UnityEngine;
 
 namespace Mas3D.Avatar
@@ -77,6 +78,72 @@ namespace Mas3D.Avatar
             // Only the root moves, never a bone: bones keep the pose, the whole body rises.
             root.position += Vector3.up * ((seat.y + HipsGap) - hips.position.y);
             Seated = true;
+        }
+
+        /// <summary>
+        /// Sit on the bed: the same route as <see cref="Sit"/>, with the bed pose and the hips lifted
+        /// to <c>seat.topY + HipsGap</c> instead of <c>seat.y + HipsGap</c>. On a bed the contact
+        /// surface is the mattress top, not the hips anchor: S2 carries y 0.916 and topY 0.906, and
+        /// sitting to y would bury her a centimetre into the duvet she is supposed to rest on.
+        /// </summary>
+        /// <returns>True when she is actually on the mattress; false when the entry or her rig could
+        /// not carry the pose, in which case nothing moved past the failed step and
+        /// <see cref="Seated"/> is false.</returns>
+        public bool SitOnBed(SeatEntry seat)
+        {
+            if (seat == null)
+            {
+                Debug.LogError("[seat] null bed entry", this);
+                return false;
+            }
+
+            if (!EnsureRig()) return false;
+
+            // Same guard as Sit: a bed sit that returns early must not leave Seated true behind, or
+            // the body capsule stays fitted to a pose that no longer exists.
+            Seated = false;
+
+            var root = Root();
+            root.SetPositionAndRotation(
+                new Vector3(seat.x, 0f, seat.z),
+                Quaternion.Euler(0f, seat.facingY, 0f));
+            AvatarPose.BedSitting(Rig);
+
+            var hips = Rig.Bone(HumanBodyBones.Hips);
+            if (hips == null)
+            {
+                Debug.LogError("[seat] rig has no Hips bone", this);
+                return false;
+            }
+
+            // Only the root moves, never a bone: the bed table keeps the pose, the whole body rises.
+            root.position += Vector3.up * ((seat.topY + HipsGap) - hips.position.y);
+            Seated = true;
+            LogBed(seat);
+            return true;
+        }
+
+        /// <summary>
+        /// One line per bed sit with the numbers the bed table was tuned against: where the hips landed
+        /// against the mattress top and how high each leg bone sits above it. A table regression then
+        /// shows up as a number in the log, not only as a failed assertion.
+        /// </summary>
+        void LogBed(SeatEntry seat)
+        {
+            var sb = new StringBuilder("[bed] hips=");
+            sb.Append(HipsWorld.y.ToString("F3")).Append(" top=").Append(seat.topY.ToString("F3"));
+            var legs = new[]
+            {
+                HumanBodyBones.LeftUpperLeg, HumanBodyBones.LeftLowerLeg, HumanBodyBones.LeftFoot,
+                HumanBodyBones.RightUpperLeg, HumanBodyBones.RightLowerLeg, HumanBodyBones.RightFoot,
+            };
+            foreach (var bone in legs)
+            {
+                var t = Rig != null ? Rig.Bone(bone) : null;
+                if (t == null) continue;
+                sb.Append(' ').Append(bone).Append('=').Append(t.position.y.ToString("F3"));
+            }
+            Debug.Log(sb.ToString(), this);
         }
 
         /// <summary>Back to standing at <paramref name="feet"/>, facing <paramref name="facingY"/>.</summary>

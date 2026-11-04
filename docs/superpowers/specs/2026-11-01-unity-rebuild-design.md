@@ -178,6 +178,39 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
     - **已知观感（非缺陷）**：出生视角里她的躯干偏灰，是因为主光（moon）从窗户一侧来、她正对摄像机的那面本来就背光，MToon 落在 shade 色上；换机位（`avatar-seated`）同一套参数下颜色正常。这是物理一致的结果，不再用提高亮度掩盖。
     - **已知债（未修）**：房间资产 `Assets/_Local/room/mita-room.glb` 同样被 ignore，而 `PlayerWalkTests`、`RoomAnchorTests`、`AvatarSeatTests.BuildRoom` 没有等价的守卫，缺 room 时它们会硬红；真正「什么都没有的干净 clone」不是全绿，只有「有 room、缺 VRM」才是 59/30/0/29 那种形态。
 
+### 5.20 P4 四件动作（2026-11-04 实测）
+
+- **五个 id**（`Assets/Scripts/Actions/ActionId.cs`，`All` 里就这五个）：`hands` 双手牵手、`pat-her` 我摸她头、`pat-me` 她摸我头、`kiss` 亲吻、`sit-together` 并肩坐床。入口是纯函数 `ActionDirector.TryEnterAction(string id)`，只回 `bool`，拒绝原因落在 `LastFaults`（"需要蹲下" / "需要跪下" / "她够不到" / "已经有个动作在演"）；出口只有一个 `Cancel()`，Esc 与 `OnDisable` 都走它。场景侧由 `RoomBootstrap.Boot()` 末尾建 `Actions` 物体（挂在 bootstrap 自己下面，随场景卸载）并把 `Actor / Player / Camera(Rig)` 三个引用接上，`Boot()` 不替玩家定姿势也不改位置——姿势由 `TryEnterAction` 解出的 plan 决定。`ActionSceneTests` 三例钉这条接线：`TheSceneCarriesADirectorReadyToPerform`、`EnteringAnActionFromTheSceneMovesThePlayerToTheMark`、`CancellingFromTheSceneReturnsThePlayerToTheSpawn`。
+- **判据**（`ContactError` 是每帧实测的代理点残差，`Held` 只在 `ContactError <= ContactTolerance (0.02 m)` 时累加；门槛集中在 `ActionDirector` 的常量区，测试直接读它们，不各写一份魔数）：
+  - `hands`：玩家站立、站在她座心正前方 `HandsOffset = 0.62` m；两掌到她掌心 ≤ 0.02 m，`Held` ≥ 3.0 s，后 1 s 掌心位置方差 ≤ (1 mm)²（呼吸不许把手抖出去），`Cancel` 后左肩回 `1°` 内。出图那次 90 帧里 gap = 0.000。
+  - `pat-her`：她低头把头顶送到玩家抬起的掌心（`PlayerReach.Raised(false)`），残差 ≤ 0.03 m；头-颈夹角 > 20°，头骨相对入场 ≥ 3° 的受力反馈；`Cancel` 后头回 `1°` 内。
+  - `pat-me`：玩家必须蹲（站立时 `LastFaults = "需要蹲下"`）；她的手到玩家头顶 ≤ 0.03 m，左肩不许跟着动。
+  - `kiss`：玩家必须跪（站立/蹲都拒，"需要跪下"）；头心距 ≤ 0.06 m、面部朝向偏差 ≤ 15°、`Held` ≥ 2.0 s、`AvatarIdle.EyesClosed` 为真（`Blink` 权重 1.0）；`Cancel` 后头回 `2°` 内且闭眼关回。实测 gap 0.0134 m、align 3.4°。
+  - `sit-together`：两人髋的水平距 ≥ 0.40 m（实测 0.70）；六根腿骨 y ≥ `topY − 0.01`；髋高 = `seat.topY + HipsGap (0.14)` ± 0.01；玩家眼 = 床面 + 0.50 ± 0.02；朝向 ± 2°。
+- **演出态锁**：进场一次性做完，顺序固定——快照 `_wasSpot / _wasYaw / _wasPosture / _wasKeyboardInput / 相机 yaw,pitch` → `Player.KeyboardInput = false`（人走不动）→ `SetPosture(plan.Posture, plan.SeatTopY)` → `Teleport(plan.Spot, plan.Yaw)` → `Camera.SetOrbit(...)` → `ActionPose.Begin(Rig)`。`Cancel()` 逆序还回去（先还键盘，再关闭眼，再 `ClearPose`，最后姿势/位置/相机），`try/finally` 保证 `_current / _held / _contactError` 一定归零。`Update` 走 `Tick(Mathf.Min(deltaTime, MaxUpdateStep = 0.1))`：卡一帧不许把动作跳过去；测试关掉 `DriveInUpdate` 手动喂 `1/60`。锁只锁轨道与移动；唯一改玩法相机参数的例外是亲吻的取景（见下），`Cancel` 会把它一并还原，之后玩家能立刻继续走。
+- **动作层分工**（一层一个职责，改一层不用碰别的）：
+  - `ActionDirector`：状态机、`ResolvePlan`（座位 → 站位、朝向、姿势、相机）、每帧 `Drive*`；
+  - `ActionPose`：骨层，`Begin` 快照 / `Apply` 表 / `Restore` 逆序还原 / `Forget`，只写 `Writable` 名单里的骨（Hips/Spine/Chest/Neck/Head/双臂），腿归 `AvatarPose`（所以 `sit-together` 的腿表和它不打架）；
+  - `TwoBoneIk`：解双臂，`DriveArm` 先解 wrist = target − approach × 0.08 再转手骨；
+  - `ActionGeometry`：量她那侧的接触点（`HerPalm / HerHeadTop / HerHeadCenter`）；
+  - `ActionSeats.BedPair(seat, 0.70)`：床上第二个座位槽，沿座位右手边复制 `y / topY / facingY / mesh`，id = `S2-pair`（实测 x 2.441，在床 AABB x 0.353…3.129 内）；
+  - `PlayerReach`：量玩家那侧的代理点。
+- **`PlayerReach` 的数值**（玩家没有骨骼：一根胶囊 + 一个 `Head`，掌心/头顶/脸只能从头推）：`Palm = head + forward × 0.24 + right × (±0.22) + up × (−0.62)`；`Raised = head + forward × 0.30 + right × (±0.12) + up × (−0.32)`；`Crown = head + up × 0.16`；`Face = head + body.forward × 0.10 − body.up × 0.04`（亲吻用，比眼低 4 cm，两张脸才不至于在眉心相撞）。0.24/0.22 是出图之后改的：旧的 0.35/0.16 在 0.62 m 站位下把两掌放到她肚子上、前臂合拢成抱拳，改后接触点离座心 0.38 m、两手相距 0.44 m，两臂才前伸张开；`PalmDrop 0.62` 不许动，`PlayerPostureTests` 钉着 `eye − 0.62`。
+- **两条已知限制**（布局事实，不是缺陷）：
+  1. `S2` 是床面中线槽（x 1.741 / z −0.025 / topY 0.906），不是床沿——`anchors.json` 的生成器只给了这一个床锚点，所以「并肩坐床」是坐床面。要坐床沿得先按 §5.15 补一个量过穿模的槽，不在本阶段。
+  2. `S2` 的 note 写明床顶是羽绒被：`topY 0.906` 是臀落被面的高度，不是床垫高度。所有判据（髋高、腿骨下限、玩家眼高）都相对这个数，换被子要重测。
+- **亲吻的取景（2026-11-04 修）**：其他动作的摇臂放在玩家自己的视线上，0.62 m 的站位刚好容得下 0.20 m 的避障球；kiss 只隔 0.31 m，她的胶囊表面离他的头 0.115 m，避障球一开始就压在她身上，Cinemachine 把摇臂压到 **0.085 m**——整幅头发（cam `(-0.29,1.28,-0.04)`、pivot `(-0.21,1.28,-0.02)`、`obstacle=Monkia`）。所以 kiss 单独换一套取景：`KissOrbitYaw = 90`（相对玩家朝向转四分之一圈，摇臂横过房间，肩部偏置朝她反方向，画面变成两人侧面）、`KissCameraRadius = 0.06`（那个距离上墙都在几米外，没有要躲的东西）、`KissCameraDistance = 1.9`（2.8 m 会把两人拍成房间里的小岛）。`Cancel` 还回 0.20 / 原距离。`ActionKissTests.TheKissFramesItsCloseUpInsteadOfSittingInHerHair` 钉死这三个数（写的是字面量而不是常量本身，否则把常量调回 0.20 照样全绿——实测过：三项一起改回旧值时唯一红的就是它，`Expected: 0.06 But was: 0.2`）。
+- **拍照不等于玩法**（`-actions 1`，`CliPlayer.CaptureActions`）：五张 `Shots/action-<id>.png` 是判据之外的目视证据，`hands / pat-her / kiss` 另存一张 `-gamecam.png` 记游戏机位；`[act]` 行同时打出 `dist / rigYaw / obstacle`，相机被挤扁时能立刻看出是被谁挤的。批处理没有 player loop，所以出图要显式 `actions.Tick(1/60) × 90` 并同步 `Actor.Idle.Tick`；改完骨还要 `RefreshSkin`（重开 SkinnedMeshRenderer，批处理的蒙皮调色板缓存停在开场景那一刻）与 `PushLids`（直接写 `Fcl_EYE_Close*` 的 blend shape，VRM10 的表情权重是在它自己的 Update 里推的）。玩家没有身体网格：任何一张图里都看不到玩家的手和脸，「两张脸并排」只能在游戏里看到——**代理点判据不等于好看，好看靠这五张图**。
+- **整支评审收口（2026-11-04）**：评审结论 Spec MATCHES / Quality CONCERNS / READY WITH CONDITIONS，五个条件全部修完——
+  1. **演出期间相机被玩家鼠标抢走**：`PlayerCameraRig.Update` 只要 `MouseInput` 为真且 `Output` 非空就 `AddOrbit` + 滚轮改 `Distance`，演出中动一下鼠标，kiss 的 0.06 m 避障半径就被打回 0.20 m。旧测试抓不到是因为夹具从不 `Build()`（`Output` 为 null 直接 return）。现在进场快照 `_wasMouseInput / _wasCameraRadius` 并 `MouseInput = false`，`Cancel` 按快照还原（半径不再硬写 0.20）。
+  2. **床姿失败是静默的**：`AvatarSeat.SitOnBed` / `AvatarActor.SitOnBed` 改返回 bool，`ActionDirector` 在动玩家之前 `Refuse("sit-together: she could not sit on the bed")`；`ABedSheCannotSitOnIsRefusedNotHalfEntered` 用「拆掉 `AvatarSeat` 组件」钉住拒绝路径（玩家不位移、不转、键盘不锁）。
+  3. **`Main.unity` 的 8500 行纯重序列化**：评审按 YAML 块逐项比对确认零语义（672/672 文档、215 个 transform 签名、195 组 MonoBehaviour 参数、`m_Script` guid 多重集全同）。场景回退到 HEAD 版并撤出暂存，`.gitattributes` 加 `*.unity text eol=lf`；`tools/unity.ps1 player` 的 fileID 噪声是独立问题，另起 chore 处理。
+  4. **`-actions 1` 被拒仍退 0**：`CaptureActions` 返回拒绝数，进循环前清掉旧的 `action-*.png` 并打 `[act] cleared N stale action shots`，`Capture` 以 `exit 2` 报告拒绝。
+  5. **`SceneFlow` 卸载 fire-and-forget**：`UnloadMainAsync` 的句柄存进静态字段，`LoadMain` 先等它结束，避免上一支场景的卸载和新场景的加载交错。
+  另修 Minor：床对槽断言改成字面量 `seat.x + 0.70`（原先拿 `BedPair` 自比较，0.70 改 0.45 也绿）、`ActionPoses.Hands` 删掉两个被 IK 整根覆盖的 `UpperArm` 键、进场失败路径 `RestoreEntering` 回滚、`PlannedPoint` 改用 `Player.EyeHeight`、`ActionDirectorTests` 真建一台相机（否则鼠标通道永不被走过）、`ActionSceneTests` 的等待加上限、`AvatarIdle.OnDisable` 释放玩家。
+- 验收（2026-11-04 终态）：`test -Mode PlayMode` **163 total / 162 passed / 0 failed / 1 skipped**（跳过的是 `[Explicit] BridgeSmokeTests.UiSceneShot`），`test -Mode EditMode` **44/44**，`-actions 1` exit 0 且五张动作图重出，`smoke` 一回合 `[smoke] turn ok turnId=ed3088c9-f231-441e-af29-3a26bb66d466`。收口轮**没有**再跑 `player`（它会把场景重新序列化一遍）；`player` 的上一次验证在 Task 8。
+  判别力（变异，均已还原）：同时删掉 `Camera.MouseInput = false` 与席位检查的返回值 → `163 total / 160 passed / 2 failed`，红的正是 `TheKissFramesItsCloseUpInsteadOfSittingInHerHair` 与 `ABedSheCannotSitOnIsRefusedNotHalfEntered`。
+
 ## 6. 四件动作的验收判据（可测，不靠肉眼）
 
 | 动作 | 判据 |

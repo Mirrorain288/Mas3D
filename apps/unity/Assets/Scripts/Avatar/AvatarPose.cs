@@ -35,6 +35,37 @@ namespace Mas3D.Avatar
             (HumanBodyBones.RightLowerArm, new Vector3(0f, -65f, 0f)),
         };
 
+
+        /// <summary>
+        /// Offset from the rest pose for sitting on the bed instead of the bench. The mattress top is
+        /// 0.906 (S2) — 0.30 m above the bench — and the hips are lifted to that surface, so the legs
+        /// cannot hang the way they do at S1: with the bench table the ankle ends 0.45 m below the hips
+        /// and parks the whole lower leg inside the bed. Here the thighs run forward level with the
+        /// mattress and the shins follow them out over the duvet, the way legs go when somebody sits on
+        /// the edge of a bed with one knee only just soft. The angles are not eyeballed: a sweep of
+        /// upper-leg against lower-leg angles (see the [bed] line AvatarSeat.SitOnBed logs) showed the
+        /// knee falling 0.244 m below the hips at -52/104 and only clearing the mattress at a hip angle
+        /// near -88, so every one of the six leg bones now sits above the mattress top. The foot is
+        /// rotated back by almost the same angle as the hip, which keeps the sole level with the duvet
+        /// instead of hanging the toes through it.
+        /// </summary>
+        static readonly (HumanBodyBones bone, Vector3 euler)[] BedTable =
+        {
+            (HumanBodyBones.Hips, new Vector3(-4f, 0f, 0f)),
+            (HumanBodyBones.Spine, new Vector3(2f, 0f, 0f)),
+            (HumanBodyBones.Chest, new Vector3(1f, 0f, 0f)),
+            (HumanBodyBones.LeftUpperLeg, new Vector3(-88f, 0f, 7f)),
+            (HumanBodyBones.RightUpperLeg, new Vector3(-88f, 0f, -7f)),
+            (HumanBodyBones.LeftLowerLeg, new Vector3(8f, 0f, 0f)),
+            (HumanBodyBones.RightLowerLeg, new Vector3(8f, 0f, 0f)),
+            (HumanBodyBones.LeftFoot, new Vector3(-84f, 0f, 0f)),
+            (HumanBodyBones.RightFoot, new Vector3(-84f, 0f, 0f)),
+            (HumanBodyBones.LeftUpperArm, new Vector3(0f, 0f, 68f)),
+            (HumanBodyBones.RightUpperArm, new Vector3(0f, 0f, -68f)),
+            (HumanBodyBones.LeftLowerArm, new Vector3(0f, 62f, 0f)),
+            (HumanBodyBones.RightLowerArm, new Vector3(0f, -62f, 0f)),
+        };
+
         // Keyed by the rig object itself, not by an instance id: ids get reused after Destroy, and a
         // stale table would make Standing restore another avatar's pose. The weak key lets a
         // destroyed rig's table go away with it.
@@ -65,10 +96,19 @@ namespace Mas3D.Avatar
         }
 
         /// <summary>Apply the sitting table on top of the rest pose.</summary>
-        public static void Sitting(AvatarRig rig)
+        public static void Sitting(AvatarRig rig) => Apply(rig, Table);
+
+        /// <summary>Apply the bed sitting table on top of the rest pose.</summary>
+        public static void BedSitting(AvatarRig rig) => Apply(rig, BedTable);
+
+        /// <summary>
+        /// Writes one table on top of the rest pose. Every angle is absolute from rest, never from the
+        /// previous call, so Sitting after BedSitting (or the other way round) cannot stack.
+        /// </summary>
+        static void Apply(AvatarRig rig, (HumanBodyBones bone, Vector3 euler)[] table)
         {
             var rest = Capture(rig);
-            foreach (var (bone, euler) in Table)
+            foreach (var (bone, euler) in table)
             {
                 var t = rig.Bone(bone);
                 if (t == null) continue;

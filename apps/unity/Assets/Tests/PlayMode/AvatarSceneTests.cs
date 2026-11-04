@@ -4,7 +4,6 @@ using Mas3D.Avatar;
 using Mas3D.Conversation;
 using NUnit.Framework;
 using UnityEngine;
-using UnityEngine.SceneManagement;
 using UnityEngine.TestTools;
 
 namespace Mas3D.Tests
@@ -15,14 +14,14 @@ namespace Mas3D.Tests
     /// to stay out of the player's way.
     ///
     /// The scene-load pattern is copied from BridgeSmokeTests.UiSceneShot, minus [Explicit]: these
-    /// cases only assert, they never screenshot, so they belong in the default suite. Unlike UiSceneShot
-    /// they load Main additively and unload it again: a scene left behind by a test keeps its player on
-    /// A2 and her capsule on S1, and the anchor and walk suites that run after this one then report the
-    /// wrong body standing in the room.
+    /// cases only assert, they never screenshot, so they belong in the default suite. The additive load
+    /// and the finally-unload now live in <see cref="SceneFlow"/>, which the action cases share; the
+    /// rule it encodes has not changed: a scene left behind by a test keeps its player on A2 and her
+    /// capsule on S1, and the anchor and walk suites that run after this one then report the wrong body
+    /// standing in the room.
     /// </summary>
     public class AvatarSceneTests
     {
-        const string SceneName = "Main";
         const string ActorName = "Monkia";
 
         /// <summary>Player capsule, matching CliPlayer: r = 0.30, h = 1.70.</summary>
@@ -33,20 +32,20 @@ namespace Mas3D.Tests
         /// cases would hard-red on a missing model instead of skipping. The 17 MB non-redistributable
         /// VRM stays out of the repository on purpose: missing asset means Ignore, not failure. Fix
         /// round 2 moved the check itself into <see cref="AvatarPrefabFixture"/>, which the rig, seat,
-        /// idle and mood fixtures share; the six call sites below stay exactly where they were.
+        /// idle and mood fixtures share. The scene cases now ask <see cref="SceneFlow.Require"/> for
+        /// the prefab and the built scene in one call; the two cases that never load a scene still ask
+        /// for the prefab alone.
         /// </summary>
         static void RequireAvatarPrefab() => AvatarPrefabFixture.Require();
 
         [UnityTest]
         public IEnumerator TheShippedSceneSeatsHerOnTheBench()
         {
-            RequireAvatarPrefab();
-            if (!Application.CanStreamedLevelBeLoaded(SceneName))
-                Assert.Ignore("先跑 tools/unity.ps1 player 构建 Main.unity");
+            SceneFlow.Require();
 
             try
             {
-                yield return LoadMain();
+                yield return SceneFlow.LoadMain();
 
                 AvatarActor actor = null;
                 yield return WaitUntilSeated(found => actor = found);
@@ -74,20 +73,18 @@ namespace Mas3D.Tests
             }
             finally
             {
-                UnloadMainIfLoaded();
+                SceneFlow.UnloadMainIfLoaded();
             }
         }
 
         [UnityTest]
         public IEnumerator ThePlayerSpawnStaysClear()
         {
-            RequireAvatarPrefab();
-            if (!Application.CanStreamedLevelBeLoaded(SceneName))
-                Assert.Ignore("先跑 tools/unity.ps1 player 构建 Main.unity");
+            SceneFlow.Require();
 
             try
             {
-                yield return LoadMain();
+                yield return SceneFlow.LoadMain();
 
                 AvatarActor actor = null;
                 yield return WaitUntilSeated(found => actor = found);
@@ -111,7 +108,7 @@ namespace Mas3D.Tests
             }
             finally
             {
-                UnloadMainIfLoaded();
+                SceneFlow.UnloadMainIfLoaded();
             }
         }
 
@@ -125,13 +122,11 @@ namespace Mas3D.Tests
         [UnityTest]
         public IEnumerator TheSeatedAvatarLeavesTheAisleVolumeClear()
         {
-            RequireAvatarPrefab();
-            if (!Application.CanStreamedLevelBeLoaded(SceneName))
-                Assert.Ignore("先跑 tools/unity.ps1 player 构建 Main.unity");
+            SceneFlow.Require();
 
             try
             {
-                yield return LoadMain();
+                yield return SceneFlow.LoadMain();
 
                 AvatarActor actor = null;
                 yield return WaitUntilSeated(found => actor = found);
@@ -153,7 +148,7 @@ namespace Mas3D.Tests
             }
             finally
             {
-                UnloadMainIfLoaded();
+                SceneFlow.UnloadMainIfLoaded();
             }
         }
 
@@ -166,13 +161,11 @@ namespace Mas3D.Tests
         [UnityTest]
         public IEnumerator StandingTakesTheBodyAway()
         {
-            RequireAvatarPrefab();
-            if (!Application.CanStreamedLevelBeLoaded(SceneName))
-                Assert.Ignore("先跑 tools/unity.ps1 player 构建 Main.unity");
+            SceneFlow.Require();
 
             try
             {
-                yield return LoadMain();
+                yield return SceneFlow.LoadMain();
 
                 AvatarActor actor = null;
                 yield return WaitUntilSeated(found => actor = found);
@@ -196,7 +189,7 @@ namespace Mas3D.Tests
             }
             finally
             {
-                UnloadMainIfLoaded();
+                SceneFlow.UnloadMainIfLoaded();
             }
         }
 
@@ -309,29 +302,6 @@ namespace Mas3D.Tests
             {
                 Object.DestroyImmediate(noRig);
             }
-        }
-
-        /// <summary>Load the shipped scene next to the test scene, never into it.</summary>
-        static IEnumerator LoadMain()
-        {
-            if (SceneManager.GetSceneByName(SceneName).isLoaded) yield return UnloadMain();
-            yield return SceneManager.LoadSceneAsync(SceneName, LoadSceneMode.Additive);
-        }
-
-        static IEnumerator UnloadMain()
-        {
-            var scene = SceneManager.GetSceneByName(SceneName);
-            if (!scene.isLoaded) yield break;
-            var unload = SceneManager.UnloadSceneAsync(scene);
-            if (unload == null) yield break;
-            while (!unload.isDone) yield return null;
-        }
-
-        /// <summary>Finally blocks cannot yield, so this only asks; the next LoadMain waits it out.</summary>
-        static void UnloadMainIfLoaded()
-        {
-            var scene = SceneManager.GetSceneByName(SceneName);
-            if (scene.isLoaded) SceneManager.UnloadSceneAsync(scene);
         }
 
         /// <summary>Boot, then the actor: wait on the state, not on a frame count.</summary>

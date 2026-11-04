@@ -1,5 +1,6 @@
 using System.IO;
 using System.Linq;
+using Mas3D.Actions;
 using Mas3D.Avatar;
 using Mas3D.Conversation;
 using Mas3D.Net;
@@ -260,6 +261,10 @@ namespace Mas3D.Editor
                 return;
             }
 
+            // The scene's own lens. The avatar shot below borrows the camera at fov 38, and the action
+            // shots have to go back to what the game would show rather than inherit that framing.
+            var sceneFov = camera.fieldOfView;
+
             var brain = camera.GetComponent<Unity.Cinemachine.CinemachineBrain>();
             if (brain == null) brain = camera.gameObject.AddComponent<Unity.Cinemachine.CinemachineBrain>();
 
@@ -350,10 +355,256 @@ namespace Mas3D.Editor
                 Debug.Log(string.Format("[play] wrote {0} fov={1:F0} eye={2} look={3}", file, camera.fieldOfView, eye.ToString("F2"), lookAt.ToString("F2")));
             }
 
+            // `-actions 1` renders one shot per action through the same camera the game uses. The
+            // director is stepped by hand here: an editor-side render never enters play mode, so its
+            // Update never runs. The stance is the caller's to choose — TryEnterAction refuses pat-me
+            // and the kiss rather than pressing the player into a posture (see ResolvePlan).
+            var refused = 0;
+            if (HasFlag("-actions"))
+            {
+                refused = CaptureActions(boot, camera, brain, target, shotDir, sceneFov);
+            }
+
             camera.targetTexture = null;
             target.Release();
             Object.DestroyImmediate(target);
-            EditorApplication.Exit(0);
+            // A refused action leaves no new PNG behind; exiting 0 would let the gate sign off on the
+            // previous run's picture for an action that never played.
+            EditorApplication.Exit(refused > 0 ? 2 : 0);
+        }
+
+
+        /// <summary>
+        /// One PNG per action, driven from the scene's own bootstrap. Ninety fixed steps at 1/60 is
+        /// 1.5 s of the action's own clock — long enough for the pose to settle and for the contact
+        /// hold to credit, short enough that the five shots stay one batch.
+        /// </summary>
+        static int CaptureActions(RoomBootstrap boot, Camera camera,
+            Unity.Cinemachine.CinemachineBrain brain, RenderTexture target, string shotDir, float sceneFov)
+        {
+            var actions = boot.Actions;
+            if (actions == null || boot.Player == null)
+            {
+                Debug.LogError("[act] no ActionDirector or player on the bootstrap: Boot() did not wire them");
+                EditorApplication.Exit(1);
+                return 0;
+            }
+
+            // Old frames would outlive a refusal: the loop only writes on success, so a shot from the
+            // last run would still sit there looking current.
+            var stale = Directory.GetFiles(shotDir, "action-*.png");
+            foreach (var old in stale) File.Delete(old);
+            Debug.Log("[act] cleared " + stale.Length + " stale action shots");
+
+            // The avatar shot left Cinemachine switched off and the lens at fov 38; the action shots
+            // are the camera the game would show, so the brain drives again from the scene's fov.
+            brain.enabled = true;
+            camera.fieldOfView = sceneFov;
+            var refused = 0;
+
+            foreach (var id in ActionId.All)
+            {
+                // pat-me is solved over a crouched player and the kiss needs his face 0.33 m lower than
+                // standing puts it; both refuse rather than forcing a stance, so the shot picks it.
+                boot.Player.SetPosture(id == ActionId.Kiss ? PlayerPosture.Kneeling
+                    : id == ActionId.PatMe ? PlayerPosture.Crouching
+                    : PlayerPosture.Standing);
+
+                if (!actions.TryEnterAction(id))
+                {
+                    Debug.LogError("[act] " + id + " refused: " + actions.LastFaults);
+                    refused++;
+                    continue;
+                }
+
+                // In play mode two Updates run every frame: the director's and the idle's. A batch
+                // capture has no player loop, so ticking only the director leaves the idle asleep - and
+                // the idle is what writes the blink expression, so the kiss rendered with her eyes wide
+                // open. Ticking both makes the frame the one the game would show.
+                for (var step = 0; step < 90; step++)
+                {
+                    actions.Tick(1f / 60f);
+                    if (boot.Actor != null && boot.Actor.Idle != null) boot.Actor.Idle.Tick(1f / 60f);
+                }
+                Physics.SyncTransforms();
+                PushLids(boot.Actor != null ? boot.Actor.gameObject : null, id == ActionId.Kiss ? 1f : 0f);
+                RefreshSkin(boot.Actor != null ? boot.Actor.gameObject : null);
+                brain.ManualUpdate();
+                camera.Render();
+
+                // Three of the five are unreadable from the game camera: the kiss camera rides a head
+                // 1.4 cm from hers, and hands / pat-her play out between the player's head and her body,
+                // where a third-person boom sees her back at 2.8 m. Those three still get the game
+                // frame, under a name that says which camera it came from, and a witness frame on top.
+                var witnessed = id == ActionId.Hands || id == ActionId.PatHer || id == ActionId.Kiss;
+                var file = Path.Combine(shotDir, "action-" + id + (witnessed ? "-gamecam" : "") + ".png");
+                WriteShot(target, file);
+                var cam = camera.transform;
+                var pivot = boot.Rig != null && boot.Rig.Pivot != null ? boot.Rig.Pivot : null;
+                var vcam = boot.Rig != null && boot.Rig.VCam != null ? boot.Rig.VCam.transform : null;
+                Debug.Log(string.Format("[act] {0} held={1:F2} gap={2:F3} cam=({3:F2},{4:F2},{5:F2}) fwd=({6:F2},{7:F2},{8:F2}) pivot={9} vcam={10} wrote={11}",
+                    id, actions.Held, actions.ContactError,
+                    cam.position.x, cam.position.y, cam.position.z,
+                    cam.forward.x, cam.forward.y, cam.forward.z,
+                    pivot == null ? "null" : pivot.position.ToString("F2"),
+                    vcam == null ? "null" : vcam.position.ToString("F2"),
+                    file));
+                // What the boom had to dodge, if anything: the kiss collapsed to a hand's width
+                // against her own capsule before the clearance sphere and the camera angle were
+                // chosen for it, and a silent collapse is invisible in a screenshot.
+                if (boot.Rig != null && boot.Rig.VCam != null)
+                {
+                    var follow = boot.Rig.VCam.GetComponent<Unity.Cinemachine.CinemachineThirdPersonFollow>();
+                    var hit = follow != null ? follow.CurrentObstacle : null;
+                    Debug.Log(string.Format("[act] {0} dist={1:F2} rigYaw={2:F1} obstacle={3}",
+                        id, boot.Rig.Distance, boot.Rig.Yaw,
+                        hit == null ? "none" : hit.name + "/" + hit.gameObject.tag));
+                }
+
+                if (id == ActionId.Hands) WriteHandsWitness(boot, camera, target, shotDir);
+                else if (id == ActionId.PatHer) WritePatWitness(boot, camera, target, shotDir);
+                else if (id == ActionId.Kiss) WriteKissWitness(boot, camera, target, shotDir);
+
+                // Sit-together puts her on the mattress; every id ends where it began, or the next
+                // marker is solved against a body that is no longer where the plan thought it was.
+                actions.Cancel();
+                Physics.SyncTransforms();
+            }
+
+            if (refused > 0)
+                Debug.LogError("[act] " + refused + " of " + ActionId.All.Length + " actions refused; the shots for those ids are missing");
+            return refused;
+        }
+
+        /// <summary>
+        /// The kiss leaves his face 1.4 cm from hers, and the game camera rides his head, so its frame
+        /// is the inside of her hair: it cannot answer the only question that shot exists for — are
+        /// the two faces meeting, or is her forehead jammed into his nose? This witness camera stands
+        /// off to the side of the contact axis and looks at the meeting point. The player has no body
+        /// mesh, so the point his head occupies is where his face would be.
+        /// </summary>
+        static void WriteKissWitness(RoomBootstrap boot, Camera camera, RenderTexture target, string shotDir)
+        {
+            var head = boot.Actor != null && boot.Actor.Rig != null
+                ? boot.Actor.Rig.Bone(HumanBodyBones.Head) : null;
+            if (head == null || boot.Player == null || boot.Player.Head == null) return;
+
+            // Her head is aimed at his face (the rig holds that within 3.4 degrees), so the only camera
+            // that can show her shut lids is one standing *on* that aim line - and straight down it her
+            // long hair hangs over her face. This one sits 55 cm out and 33 degrees to her right, which
+            // parts the hair: the face, both shut lids and the 1.3 cm meeting distance all land in frame.
+            // The player has no mesh (BuildPlayer is a capsule, a motor and a camera rig), so his side of
+            // the meeting exists only as the empty space the camera stands in.
+            var axis = head.forward;
+            var side = head.right;
+            var face = head.position + axis * 0.09f;
+            // Stay level with her face: her aim axis tilts down onto the kneeling player, and following it
+            // put the camera 0.32 m under her chin with the ceiling behind her. The horizontal part of
+            // the same 33-degree shoulder offset keeps her face against the room instead.
+            var level = new Vector3(axis.x, 0f, axis.z).normalized;
+            var at = face + (level * 0.85f + side * 0.55f).normalized * 0.46f - Vector3.up * 0.17f;
+            var faces = Vector3.Distance(PlayerReach.Face(boot.Player), face);
+            WriteWitness(camera, target, Path.Combine(shotDir, "action-kiss.png"), "kiss", at, face, "faces=" + faces.ToString("F3"));
+        }
+
+        /// <summary>
+        /// Hands are solved between his palms and hers, 0.24 m in front of his chest and 0.62 m below
+        /// his eye: from the game camera that whole exchange is hidden behind her own shoulders. The
+        /// witness stands 0.95 m behind the palms and 0.95 m to his right, at chest height, so the two
+        /// forearms and the four palms are seen side-on against her body.
+        /// </summary>
+        static void WriteHandsWitness(RoomBootstrap boot, Camera camera, RenderTexture target, string shotDir)
+        {
+            var player = boot.Player;
+            if (player == null || player.Head == null) return;
+
+            var focus = (PlayerReach.Palm(player, true) + PlayerReach.Palm(player, false)) * 0.5f;
+            var body = player.transform;
+            var at = focus - body.forward * 0.80f + body.right * 0.80f + Vector3.up * 0.40f;
+            WriteWitness(camera, target, Path.Combine(shotDir, "action-hands.png"), "hands", at, focus, null);
+        }
+
+        /// <summary>
+        /// Pat-her is her head top meeting a palm that has no mesh, so the frame has to carry the bow:
+        /// the witness sits 0.70 m behind him and 0.80 m to his right, 0.62 m above her head top, and
+        /// looks down at the head top, which reads as a head offered under a hand.
+        /// </summary>
+        static void WritePatWitness(RoomBootstrap boot, Camera camera, RenderTexture target, string shotDir)
+        {
+            var rig = boot.Actor != null ? boot.Actor.Rig : null;
+            var player = boot.Player;
+            if (rig == null || player == null || player.Head == null) return;
+
+            // Raised and off to his right, as the review asked: her bowed head, her arms resting in her
+            // lap (they used to reach her own ear and read as her covering her head), and the 0.62 m of
+            // empty air above her head top where the palm the geometry holds her to actually is. The
+            // player has no mesh, so that hand can only exist as that air.
+            var focus = ActionGeometry.HerHeadTop(rig);
+            var at = focus - player.transform.forward * 0.70f + player.transform.right * 0.80f + Vector3.up * 0.62f;
+            WriteWitness(camera, target, Path.Combine(shotDir, "action-pat-her.png"), "pat-her", at, focus, null);
+        }
+
+        /// <summary>
+        /// VRM10 pushes expression weights into the face blend shapes from its own Update, and a batch
+        /// capture never runs one: AvatarIdle forcing EyesClosed = 1 leaves the runtime weight at 1 while
+        /// every one of the face's 57 shapes stays at 0, so the kiss rendered with her eyes wide open -
+        /// the one thing that shot exists to prove. The Blink expression owns the three lid shapes below;
+        /// writing them here makes the frame the one play mode would composite, and the log line is the
+        /// evidence that it did.
+        /// </summary>
+        static void PushLids(GameObject root, float weight)
+        {
+            if (root == null) return;
+
+            var written = 0;
+            foreach (var skin in root.GetComponentsInChildren<SkinnedMeshRenderer>(true))
+            {
+                var mesh = skin.sharedMesh;
+                if (mesh == null) continue;
+                for (var i = 0; i < mesh.blendShapeCount; i++)
+                {
+                    var name = mesh.GetBlendShapeName(i);
+                    if (name != "Fcl_EYE_Close" && name != "Fcl_EYE_Close_L" && name != "Fcl_EYE_Close_R") continue;
+                    skin.SetBlendShapeWeight(i, Mathf.Clamp01(weight) * 100f);
+                    written++;
+                }
+            }
+
+            Debug.Log("[act] lids=" + weight.ToString("F2") + " shapes=" + written);
+        }
+
+        /// <summary>A fixed camera for one frame: bypasses the brain, renders, writes, and hands control back.</summary>
+        static void WriteWitness(Camera camera, RenderTexture target, string file, string tag,
+            Vector3 position, Vector3 lookAt, string extra)
+        {
+            var brain = camera.GetComponent<Unity.Cinemachine.CinemachineBrain>();
+            if (brain != null) brain.enabled = false;
+
+            camera.transform.position = position;
+            camera.transform.rotation = Quaternion.LookRotation(lookAt - position, Vector3.up);
+            camera.Render();
+            WriteShot(target, file);
+            Debug.Log(string.Format("[act] {0} witness wrote={1} at=({2:F2},{3:F2},{4:F2}) look=({5:F2},{6:F2},{7:F2}){8}",
+                tag, file, position.x, position.y, position.z, lookAt.x, lookAt.y, lookAt.z,
+                string.IsNullOrEmpty(extra) ? "" : " " + extra));
+
+            if (brain != null) brain.enabled = true;
+        }
+
+        /// <summary>
+        /// Forces the skinned meshes to re-bake their bone palette. A batch capture never runs a
+        /// player loop, so the palette the renderer cached stays where it was when the scene was
+        /// opened: posing bones then calling Camera.Render() paints the pose from before the
+        /// action, which made hands and pat-her come out pixel-identical. Disabling and re-enabling
+        /// the renderer is the documented way to make it recalculate outside play mode.
+        /// </summary>
+        static void RefreshSkin(GameObject root)
+        {
+            if (root == null) return;
+
+            var skins = root.GetComponentsInChildren<SkinnedMeshRenderer>(true);
+            foreach (var skin in skins) skin.enabled = false;
+            foreach (var skin in skins) skin.enabled = true;
         }
 
         /// <summary>Reads the target back and writes it as a PNG.</summary>

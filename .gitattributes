@@ -26,6 +26,9 @@
 *.cmd text eol=crlf
 *.bat text eol=crlf
 
+# Unity 场景由编辑器整篇重写：统一 LF，至少让换行不再制造噪声
+*.unity text eol=lf
+
 # 二进制
 *.png binary
 *.jpg binary

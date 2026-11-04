@@ -12,6 +12,13 @@ namespace Mas3D
     public class PlayerCameraRig : MonoBehaviour
     {
         public float Distance = 2.8f;
+
+        /// <summary>
+        /// Radius of the sphere the boom keeps clear of geometry. Rooms need 0.20 m so the near plane
+        /// never pokes through a wall; a scripted close-up between two bodies has no room for it and
+        /// squeezes the boom to a hand's width, so the director may shrink it for that action alone.
+        /// </summary>
+        public float CameraRadius = 0.20f;
         public float ShoulderOffset = 0.28f;
         public float VerticalArm = 0.18f;
         public float MinPitch = -55f;
@@ -67,7 +74,7 @@ namespace Mas3D
             _follow.Damping = new Vector3(0.08f, 0.12f, 0.06f);
             var avoid = _follow.AvoidObstacles;
             avoid.Enabled = true;
-            avoid.CameraRadius = 0.20f;
+            avoid.CameraRadius = CameraRadius;
             avoid.IgnoreTag = "Player";
             _follow.AvoidObstacles = avoid;
 
@@ -94,6 +101,16 @@ namespace Mas3D
         public void AddOrbit(float deltaYaw, float deltaPitch)
         {
             SetOrbit(Yaw + deltaYaw, Pitch - deltaPitch);
+        }
+
+        /// <summary>Shrink or restore the boom's clearance sphere. Applied immediately, not next Build.</summary>
+        public void SetCameraRadius(float radius)
+        {
+            CameraRadius = Mathf.Max(0.01f, radius);
+            if (_follow == null) return;
+            var avoid = _follow.AvoidObstacles;
+            avoid.CameraRadius = CameraRadius;
+            _follow.AvoidObstacles = avoid;
         }
 
         public void SetDistance(float distance)

@@ -26,6 +26,7 @@ namespace Mas3D
         float _vertical;
 
         public Transform Head { get; private set; }
+        public PlayerPosture Posture { get; private set; } = PlayerPosture.Standing;
         public Vector3 PlanarVelocity => _planar;
         public bool Grounded => _controller != null && _controller.isGrounded;
 
@@ -56,6 +57,53 @@ namespace Mas3D
             }
             head.localPosition = new Vector3(0f, EyeHeight, 0f);
             Head = head;
+        }
+
+        /// <summary>
+        /// The eye height, capsule height and capsule centre a stance implies. Standing is the
+        /// original rig (1.62 / 1.70 / 0.85); a sitting player sits on a 1.15 m capsule so the
+        /// eye lands 0.50 m above the seat. Kneeling (1.28) is the only stance that lands a face
+        /// level with a seated, forward-leaning her: standing 1.62 and crouching 1.05 both miss.
+        /// </summary>
+        public static (float eye, float capsuleHeight, float capsuleCentre) Metrics(PlayerPosture posture)
+        {
+            switch (posture)
+            {
+                case PlayerPosture.Crouching: return (1.05f, 1.10f, 0.55f);
+                case PlayerPosture.Sitting: return (1.10f, 1.15f, 0.575f);
+                case PlayerPosture.Kneeling: return (1.28f, 1.32f, 0.66f);
+                default: return (1.62f, 1.70f, 0.85f);
+            }
+        }
+
+        /// <summary>
+        /// Puts the player in <paramref name="posture"/>. The two public metrics are rewritten
+        /// first so a later <see cref="EnsureReady"/> reproduces exactly the same capsule and eye
+        /// instead of standing the player back up.
+        /// <para>
+        /// <paramref name="seatTopY"/> is the surface the player sits on, and only Sitting reads it:
+        /// the bench (topY 0.604) leaves the plan's fixed 1.10 eye, while the bed (topY 0.906) has to
+        /// put the eye 0.50 m above the mattress at 1.406 or the player sits with their knees in it.
+        /// Zero means "no surface named" and keeps the fixed 1.10.
+        /// </para>
+        /// </summary>
+        public void SetPosture(PlayerPosture posture, float seatTopY = 0f)
+        {
+            Posture = posture;
+            var (eye, capsuleHeight, capsuleCentre) = Metrics(posture);
+            if (posture == PlayerPosture.Sitting && seatTopY > 0f) eye = seatTopY + 0.50f;
+            EyeHeight = eye;
+            CapsuleHeight = capsuleHeight;
+
+            if (_controller == null) _controller = GetComponent<CharacterController>();
+            if (_controller != null)
+            {
+                _controller.height = capsuleHeight;
+                _controller.center = new Vector3(0f, capsuleCentre, 0f);
+            }
+
+            if (Head == null) EnsureReady();
+            if (Head != null) Head.localPosition = new Vector3(0f, eye, 0f);
         }
 
         void Update()

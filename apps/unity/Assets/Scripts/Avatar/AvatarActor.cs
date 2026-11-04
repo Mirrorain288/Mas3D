@@ -148,6 +148,38 @@ namespace Mas3D.Avatar
         }
 
         /// <summary>
+        /// Sit on a bed from anchors.json with the bed table. The three steps are <see cref="SitAt"/>'s
+        /// on purpose — pose, re-base the idle, fit the capsule from the live hips — because the bed is
+        /// a different pose, not a different kind of seating.
+        /// </summary>
+        /// <returns>True when the seat took. The director asks before it commits the player to a
+        /// performance: a bed she cannot sit on must be a refusal, not a silent half-entry.</returns>
+        public bool SitOnBed(string seatId)
+        {
+            Wire();
+            if (Rig != null) Rig.EnsureBound();
+            if (Seat == null)
+            {
+                Debug.LogError("[actor] no AvatarSeat on " + name, this);
+                return false;
+            }
+
+            var table = AnchorTable.Load();
+            var bed = table != null ? table.Seat(seatId) : null;
+            if (bed == null)
+            {
+                Debug.LogError("[actor] bed '" + seatId + "' not found in anchors.json", this);
+                return false;
+            }
+
+            if (!Seat.SitOnBed(bed)) return false;
+
+            if (Idle != null) Idle.CaptureBaseline();
+            FitBody();
+            return true;
+        }
+
+        /// <summary>
         /// Place the capsule from the live hips joint. Safe to call repeatedly; the collider is
         /// reused. When she is not seated there is no height to measure against, so the capsule is
         /// removed instead of left floating where the seated body used to be.

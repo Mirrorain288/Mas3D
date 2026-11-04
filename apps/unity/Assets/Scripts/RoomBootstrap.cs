@@ -1,3 +1,4 @@
+using Mas3D.Actions;
 using Mas3D.Avatar;
 using Mas3D.Conversation;
 using Mas3D.Net;
@@ -30,6 +31,15 @@ namespace Mas3D
 
         /// <summary>按住 V 说话的语音层：它要的正是同一块面板，所以在这里接线，别处不必知道。</summary>
         public VoiceInput Voice;
+
+        /// <summary>
+        /// The performance state machine, wired to her, the player and the camera rig. Boot creates it
+        /// when the scene carries none, so the shipped scene needs no extra object and every caller of
+        /// Boot (CliPlayer included) gets a working director. Boot only wires it: which posture an
+        /// action needs, and where the player stands, stays <see cref="ActionDirector.TryEnterAction"/>'s
+        /// decision — entering an action must not be forced on the player at spawn.
+        /// </summary>
+        public ActionDirector Actions;
 
         // The imported floor sits at y = 0.04; spawning exactly on it leaves the capsule
         // penetrating, and a penetrating CharacterController never reports itself grounded.
@@ -86,6 +96,25 @@ namespace Mas3D
                 var panel = Dialogue.Panel != null ? Dialogue.Panel : FindAnyObjectByType<DialoguePanel>();
                 if (panel != null) Voice.Bind(panel, new BridgeSettings { Token = token });
             }
+
+            // The director is wired last because it needs all three: her rig, the player's head and the
+            // camera orbit Rig.Build set up above. Creating it here (rather than in the scene) keeps the
+            // saved scene free of a component nobody has to place by hand; an Actions field already
+            // filled in wins, so a hand-wired director is not replaced.
+            if (Actions == null)
+            {
+                var go = new GameObject("Actions");
+
+                // Parented, not loose: a runtime object joins whatever scene is active, and Main is
+                // loaded additively in tests. Loose, the director outlives the scene that gave it a
+                // player and keeps ticking against a destroyed one — MissingReferenceException every
+                // frame, which is what turned one unload into 97 red cases.
+                go.transform.SetParent(transform, false);
+                Actions = go.AddComponent<ActionDirector>();
+            }
+            Actions.Actor = Actor;
+            Actions.Player = Player;
+            Actions.Camera = Rig;
 
             Debug.Log($"[room] colliders={ColliderCount} spawn={(anchor != null ? anchor.id : "none")} at={(anchor != null ? anchor.x.ToString("F2") + "," + anchor.z.ToString("F2") : "-")}");
         }

@@ -73,6 +73,14 @@ namespace Mas3D.Avatar
         /// <summary>Current blink envelope, 0 (open) to <see cref="BlinkCap"/> (shut).</summary>
         public float BlinkWeight { get; private set; }
 
+        /// <summary>
+        /// Held shut while true: every tick writes the blink expression at full strength and skips the
+        /// blinking envelope, so the face is actually closed on the VRM rather than merely reported as
+        /// such. The envelope's own ceiling (<see cref="BlinkCap"/>, 0.85) is untouched and takes over
+        /// the moment this goes back to false — that is the difference the kiss test pins.
+        /// </summary>
+        public bool EyesClosed { get; set; }
+
         /// <summary>Whoever the eyes are on, if anybody.</summary>
         public Transform GazeTarget { get; private set; }
 
@@ -137,6 +145,13 @@ namespace Mas3D.Avatar
             if (GazeTarget != null) ApplyGaze(GazeTarget);
         }
 
+        /// <summary>
+        /// Bones another system owns right now. The breath writes Chest and Spine every frame, so an
+        /// action that leans her forward would be unwound one frame after it started; whoever poses
+        /// those bones claims them here and the breath steps aside until the claim is gone.
+        /// </summary>
+        public static System.Func<HumanBodyBones, bool> BoneClaim;
+
         void Update()
         {
             Tick(Time.deltaTime);
@@ -149,8 +164,12 @@ namespace Mas3D.Avatar
             if (!EnsureBound()) return;
 
             // Sit, Stand or anything else wrote these bones since our last tick: our base is stale.
-            _chestTouched = MovedOutside(_chest, _chestWritten);
-            _spineTouched = MovedOutside(_spine, _spineWritten);
+            // A claimed bone is the exception: an action owns it right now, so its lean is not a new
+            // resting pose. Without this guard the debounce below would capture the lean as the
+            // baseline, and a pat shorter than RecaptureDebounce would weld it in for good (the
+            // restore writes back the very rotation we last wrote, so nothing else ever rebases).
+            _chestTouched = !Claimed(HumanBodyBones.Chest) && MovedOutside(_chest, _chestWritten);
+            _spineTouched = !Claimed(HumanBodyBones.Spine) && MovedOutside(_spine, _spineWritten);
             _sinceRecapture += dt;
             if (_chestTouched || _spineTouched)
             {
@@ -174,14 +193,14 @@ namespace Mas3D.Avatar
             _time += dt;
 
             var breath = Mathf.Sin(_time / Safe(BreathPeriod) * Mathf.PI * 2f) * BreathDegrees;
-            if (_chest != null)
+            if (_chest != null && !Claimed(HumanBodyBones.Chest))
             {
                 _chest.localRotation = _chestBase * Quaternion.Euler(breath, 0f, 0f);
                 _chestWritten = _chest.localRotation;
             }
 
             var sway = Mathf.Sin(_time / Safe(SwayPeriod) * Mathf.PI * 2f) * SwayDegrees;
-            if (_spine != null)
+            if (_spine != null && !Claimed(HumanBodyBones.Spine))
             {
                 _spine.localRotation = _spineBase * Quaternion.Euler(0f, 0f, sway);
                 _spineWritten = _spine.localRotation;
@@ -229,8 +248,25 @@ namespace Mas3D.Avatar
             written = baseRotation;
         }
 
+        static bool Claimed(HumanBodyBones bone)
+        {
+            var claim = BoneClaim;
+            return claim != null && claim(bone);
+        }
+
         void TickBlink()
         {
+            // Forced shut (Task 6): the kiss holds the lids down for as long as the action lasts.
+            // The blink envelope is skipped entirely and the expression is written here, every tick:
+            // BlinkWeight alone is internal state and would never reach the VRM face.
+            if (EyesClosed)
+            {
+                BlinkWeight = 1f;
+                Blinking = true;
+                Rig.SetExpression(ExpressionKey.Blink, BlinkWeight);
+                return;
+            }
+
             BlinkWeight = 0f;
             if (!_hasBlink || BlinkPeriod <= 0f || BlinkSeconds <= 0f)
             {
