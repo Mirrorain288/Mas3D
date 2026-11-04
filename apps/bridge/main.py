@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ from .adapter import (
     skip_platform_tts,
     suppress_external_splitter,
 )
+from .asr import AsrClient
 from .hastsec import HastSecClient
 from .session import DEFAULT_UMO, SESSION_MODES, resolve_umo, umo_for_mode
 from .token import load_token, token_path
@@ -91,6 +93,8 @@ class Mas3dGamePlugin(Star):
         self.server: LocalServer | None = None
         self.hast: HastSecClient | None = None
         self.tts: TtsClient | None = None
+        self.asr: AsrClient | None = None
+        self._voice_lock: asyncio.Lock | None = None
         self.usage = SessionUsage(DATA_DIR / "mas3d" / "usage.json")
 
     async def initialize(self) -> None:
@@ -102,7 +106,13 @@ class Mas3dGamePlugin(Star):
                 __version__,
             )
         self.hast = HastSecClient(session_path=DATA_DIR / "mas3d" / "session.json")
-        self.tts = TtsClient(DATA_DIR / "mas3d" / "cache" / "tts")
+        # 本机只有一块 GPU：TTS 与 ASR 共用这把锁，正常情况下本插件的这两个后端同一时刻只跑一个。
+        # 锁的边界要写清楚：AstrBot 自己的 QQ 语音不走这把锁（见 tts.py 的 BASE_PARAMS
+        # 注释），仍会和这里抢显卡；取消一条 ASR 请求不会提前放锁，但取消一条 TTS 合成
+        # 仍会在子进程收尾前放锁，后者是已知欠账。
+        self._voice_lock = asyncio.Lock()
+        self.tts = TtsClient(DATA_DIR / "mas3d" / "cache" / "tts", lock=self._voice_lock)
+        self.asr = AsrClient(lock=self._voice_lock)
         error = getattr(self.bridge, "last_error", None)
         if error:
             logger.warning("mas3d_game 桥接初始化有问题：%s", error)
@@ -231,6 +241,12 @@ class Mas3dGamePlugin(Star):
         if self.tts is None:
             raise RuntimeError("语音后端未初始化")
         return await self.tts.synthesize(text, sentence)
+
+    async def handle_asr(self, raw: bytes) -> dict[str, Any]:
+        """供语音识别端点调用：把一段 WAV 交给本地 Whisper 转文本。"""
+        if self.asr is None:
+            raise RuntimeError("语音识别后端未初始化")
+        return await self.asr.transcribe(raw)
 
     def voice_path(self, voice_id: str) -> Path | None:
         """把 voice_id 映射到缓存里的 WAV 路径；不合法或不存在都返回 None。"""

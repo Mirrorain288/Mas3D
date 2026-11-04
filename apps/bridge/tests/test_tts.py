@@ -350,3 +350,109 @@ def test_synthesize_drops_characters_the_api_cannot_take(tmp_path, plugin):
     sent = transport.tts_calls()[0]["text"]
     assert "🐷" not in sent
     assert sent == "Okay let us go!"
+
+class _Activity:
+    """数「同一时刻有几个后端在干活」，用来证明共用锁真的把 GPU 串起来了。"""
+
+    def __init__(self) -> None:
+        self.active = 0
+        self.peak = 0
+
+    def enter(self) -> None:
+        self.active += 1
+        self.peak = max(self.peak, self.active)
+
+    def leave(self) -> None:
+        self.active -= 1
+
+
+class _ObservedTransport(FakeTransport):
+    """只在 /tts 上占用 activity；两个合成同时跑时 peak 会变成 2。"""
+
+    def __init__(self, activity: _Activity, delay_s: float = 0.15) -> None:
+        super().__init__()
+        self.activity = activity
+        self.delay_s = delay_s
+
+    def __call__(self, path: str, params: dict, timeout_s: float) -> bytes:
+        self.calls.append((path, dict(params)))
+        if path.startswith("/set_"):
+            return b"ok"
+        self.activity.enter()
+        try:
+            time.sleep(self.delay_s)
+        finally:
+            self.activity.leave()
+        return _wav(200)
+
+
+class _SlowWhisperModel:
+    device = "cpu"
+
+    def __init__(self, activity: _Activity, delay_s: float = 0.15) -> None:
+        self.activity = activity
+        self.delay_s = delay_s
+        self.calls = 0
+
+    def transcribe(self, samples, **kwargs):
+        self.calls += 1
+        self.activity.enter()
+        try:
+            time.sleep(self.delay_s)
+        finally:
+            self.activity.leave()
+        return {"text": " 你好呀。 "}
+
+
+async def _english(text: str) -> str:
+    return "Hello there."
+
+
+def _voice_pair(tmp_path, plugin, lock):
+    """同一把锁交给 TTS 与 ASR；传 None 时就是各跑各的旧行为。"""
+    tts = importlib.import_module(f"{PLUGIN}.tts")
+    asr = importlib.import_module(f"{PLUGIN}.asr")
+    activity = _Activity()
+    tts_client = tts.TtsClient(
+        tmp_path,
+        transport=_ObservedTransport(activity),
+        translator=_english,
+        lock=lock,
+    )
+    model = _SlowWhisperModel(activity)
+    asr_client = asr.AsrClient(lock=lock, loader=lambda name: model)
+    return activity, tts_client, asr_client, model
+
+
+def test_shared_lock_serializes_tts_and_asr(tmp_path, plugin):
+    """同一把锁：TTS 合成与 ASR 识别不会同时在 GPU 上跑（峰值 1）。"""
+    activity, tts_client, asr_client, model = _voice_pair(tmp_path, plugin, asyncio.Lock())
+
+    async def run_both():
+        return await asyncio.gather(
+            tts_client.synthesize("你好。"),
+            asr_client.transcribe(_wav(300)),
+        )
+
+    voice, transcript = asyncio.run(run_both())
+
+    assert voice["durationMs"] == 200
+    assert transcript == {"text": "你好呀。", "language": "zh", "durationMs": 300, "model": "small"}
+    assert model.calls == 1
+    assert activity.peak == 1
+
+
+def test_without_shared_lock_tts_and_asr_still_overlap(tmp_path, plugin):
+    """不传锁时保持旧行为：两个后端互不等待，这里故意让它们重叠（峰值 2）。"""
+    activity, tts_client, asr_client, _model = _voice_pair(tmp_path, plugin, None)
+
+    async def run_both():
+        return await asyncio.gather(
+            tts_client.synthesize("你好。"),
+            asr_client.transcribe(_wav(300)),
+        )
+
+    asyncio.run(run_both())
+
+    assert activity.peak == 2
+

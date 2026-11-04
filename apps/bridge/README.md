@@ -26,6 +26,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools\link-plugin.ps1 -Force
 | WS | `/mas3d/ws?token=…` | 回合对话：`ack → thinking →（intent）→ reply` |
 | POST | `/mas3d/api/motion/plan` | HAST-SEC 动作意图代理 |
 | POST | `/mas3d/api/voice/synth` | 本地 GPT-SoVITS 合成 + 逐句时间线 |
+| POST | `/mas3d/api/asr` | 本地 Whisper 识别：裸 WAV body → `{"ok": true, "asr": {...}}`；400/413/503/504 见下节（WAV ≤8 MiB / ≤30 s，与 TTS 共用一把 GPU 锁） |
 
 全部只绑 `127.0.0.1`，令牌存放在 `plugin_data/mas3d/token`（首次启动生成），前端用 `Authorization: Bearer` 或 WS query 传入。
 
@@ -88,6 +89,17 @@ curl.exe -s -X POST http://127.0.0.1:9880/tts -H "Content-Type: application/json
 - 单句 30 秒、整轮 60 秒超时；单并发（`Semaphore(1)`）。
 
 没启动 GPT-SoVITS 时游戏照常运行：`/voice/synth` 返回 503，回合只显示字幕。
+
+## 语音识别（本地 Whisper）
+
+`POST /mas3d/api/asr`：body 就是**裸 WAV 字节**（不看 `Content-Type`，也**不收** `multipart/form-data` —— 开头的 `--boundary` 过不了 RIFF 校验，直接 400），成功返回 `{"ok": true, "asr": {"text", "language", "durationMs", "model"}}`，`text` 已去首尾空白、压掉连续空白、剥掉最外层一对引号。鉴权与其它端点相同：`Authorization: Bearer <token>`，令牌仍是 `plugin_data/mas3d/token` 那一份。
+
+- 只收 RIFF/WAVE + PCM + 单声道 + 16-bit，声明采样率 8 000–192 000 Hz；推理前线性重采样到 16 kHz（openai-whisper 的 ndarray 入口默认就是 16 kHz），并按重采样后的长度再查一次 30 秒。
+- 上限两个：**8 MiB**（`Content-Length` 已超限先拒，分块上传读完 body 再拒）、**30 秒**。
+- 错误语义：**400** 音频不合法（坏 WAV / 非 16-bit PCM / 多声道 / 超 30 秒；`error` 是给客户端读的原因文本）；**413** 音频太大（上限 8 MiB）；**503** `语音识别忙，稍后再试`（等 GPU 锁 15 秒没排上号，重试有机会成功）或 `语音识别不可用`（模型/后端不可用）；**504** `语音识别超时`（整体 45 秒预算用完）。
+- 与 TTS 共用一把 GPU 锁（插件里的 `_voice_lock`，同时交给 `TtsClient` 与 `AsrClient`）。**ASR 的锁归 worker 任务所有**：调用方被取消（HTTP 超时、客户端断开、Unity 中止请求）不会提前放锁，worker 会把这一次推理跑完再放 —— 代价是被取消的那一段仍会烧一次 GPU，紧接着的请求可能等满 15 秒得到 503。**TTS 侧仍是 `async with`**，取消即放锁，是已知的债（见 `tts.py` 与 `main.py` 的注释）。
+- 模型 `small`，加载失败自动退到 `tiny`，两者都失败才 503；`language="zh"`，`initial_prompt` 固定一句普通话提示。
+- Unity 侧消费方：`apps/unity/Assets/Scripts/Voice/VoiceInput.cs`（按住 V 录、松开识别，结果只填进输入框不发送）。面板只显示一句统一的失败文案（`语音识别没有响应，先打字吧。`），**不区分** 401/413/503/504；具体原因写在 `Player.log`（`[VoiceInput] 识别失败：…`）。没有麦克风时显示 `没有可用的麦克风`。客户端超时 55 秒，比桥接的 45 秒预算长，好让 504 有机会先回到面板。
 
 ## 测试
 

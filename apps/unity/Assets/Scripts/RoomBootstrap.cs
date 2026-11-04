@@ -1,5 +1,8 @@
 using Mas3D.Avatar;
 using Mas3D.Conversation;
+using Mas3D.Net;
+using Mas3D.UI;
+using Mas3D.Voice;
 using UnityEngine;
 
 namespace Mas3D
@@ -24,6 +27,9 @@ namespace Mas3D
         /// <summary>The conversation that drives her face. Left null in a dialogue-less scene, in
         /// which case Boot falls back to whatever controller it can find.</summary>
         public ConversationController Dialogue;
+
+        /// <summary>按住 V 说话的语音层：它要的正是同一块面板，所以在这里接线，别处不必知道。</summary>
+        public VoiceInput Voice;
 
         // The imported floor sits at y = 0.04; spawning exactly on it leaves the capsule
         // penetrating, and a penetrating CharacterController never reports itself grounded.
@@ -66,6 +72,19 @@ namespace Mas3D
                 Actor.BindGaze(Player.Head);
                 var conversation = Dialogue != null ? Dialogue : FindAnyObjectByType<ConversationController>();
                 if (conversation != null) Actor.BindConversation(conversation);
+            }
+
+            // 语音层也接在同一块面板上：没有面板就没地方落状态词和识别结果。
+            // 令牌只读桥接自己写盘的那一份；读不到就警告一次照常起，按住 V 时由 VoiceInput
+            // 自己把失败落到面板上，不能让没起桥接的机器连房间都进不去。
+            if (Voice != null && Dialogue != null)
+            {
+                var token = DialogueBridge.ReadTokenFromDisk();
+                if (string.IsNullOrEmpty(token))
+                    Debug.LogWarning("[voice] 没有令牌（" + BridgeSettings.TokenFilePath + "）：ASR 会被桥接拒绝，其余照常");
+                // Dialogue 是驱动器不是面板；它驱动的那块面板才是语音要落字的地方。
+                var panel = Dialogue.Panel != null ? Dialogue.Panel : FindAnyObjectByType<DialoguePanel>();
+                if (panel != null) Voice.Bind(panel, new BridgeSettings { Token = token });
             }
 
             Debug.Log($"[room] colliders={ColliderCount} spawn={(anchor != null ? anchor.id : "none")} at={(anchor != null ? anchor.x.ToString("F2") + "," + anchor.z.ToString("F2") : "-")}");

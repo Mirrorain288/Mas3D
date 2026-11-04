@@ -26,6 +26,14 @@
 - **`webchat` 平台适配器**：`core/platform/sources/webchat/webchat_adapter.py:213` 把 session_id 强制写成 `webchat!<user>!<cid>`，无法伪装成 QQ 会话，因此「共用记忆」这条需求做不到。
 - **`provider_tts_settings`**：平台自带 TTS 按 umo 查 `SessionServiceManager`（`core/star/session_llm_manager.py:144`），与 QQ 共用、按事件关不掉，所以改用内容类型降级绕开。
 
+### 2.1 为什么用 openai-whisper 而不是 faster-whisper
+
+ASR 复用面板环境里已经装好的 openai-whisper + torch（cu128），`small` / `tiny` 权重早就在缓存里，起服务不用再下载任何东西。faster-whisper 要多带一份 `ctranslate2` 和它自己的权重格式，而本项目只有 `/mas3d/api/asr` 一个端点、没有吞吐指标要追——换库买不到可测的收益，只多一条会随 AstrBot 升级漂移的依赖。
+
+配套的两条实现约束：
+- `apps/bridge/asr.py` 在 `_load` 里才 `import whisper`（延迟导入），模块导入阶段不碰 torch/CUDA。面板启动时先把房间和 WS 拉起来，第一次按 V 时才付初始化代价。
+- 采样率自己处理：只收 PCM 单声道 16-bit WAV，推理前线性重采样到 16 kHz（whisper 的 ndarray 入口就是这个隐含采样率），不依赖 ffmpeg。
+
 ## 3. 升级检查清单
 
 升级 AstrBot 后依次确认：

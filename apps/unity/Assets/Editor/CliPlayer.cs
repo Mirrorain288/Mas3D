@@ -4,6 +4,7 @@ using Mas3D.Avatar;
 using Mas3D.Conversation;
 using Mas3D.Net;
 using Mas3D.UI;
+using Mas3D.Voice;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -78,6 +79,12 @@ namespace Mas3D.Editor
             Debug.Log(File.Exists(tokenPath)
                 ? "[player] dialogue wired, token present at " + tokenPath
                 : "[player] dialogue wired, no token at " + tokenPath + " -> offline fallback copy");
+
+            // 按住 V 说话用的那一层。挂在同一个 Session 物体上：面板是 BuildDialogue 建的那一块，
+            // 令牌要到运行时才读（BridgeSettings.TokenFilePath 在真机上才算得出来），所以这里只存引用。
+            var voice = bootGo.AddComponent<VoiceInput>();
+            voice.Panel = dialogue;
+            boot.Voice = voice;
 
             CopyAnchors();
 

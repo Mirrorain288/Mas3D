@@ -32,6 +32,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from .adapter import TurnDispatchError
+from .asr import MAX_WAV_BYTES, AsrBusy, AsrUnavailable
 from .hastsec import BackendUnavailable, PlanRejected
 from .tts import MAX_TEXT_CHARS as MAX_VOICE_CHARS
 from .tts import TtsUnavailable
@@ -56,6 +57,9 @@ _TURN_LOCK = asyncio.Lock()
 
 VOICE_TIMEOUT_S = 70.0
 """POST /mas3d/api/voice/synth 的整体预算；客户端自己还有单句 30s / 整轮 60s 两层超时。"""
+
+ASR_TIMEOUT_S = 45.0
+"""POST /mas3d/api/asr 的整体预算；客户端自己限制 30s 录音与 8 MiB 上传。"""
 
 LOCAL_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
 CORS_ORIGIN_RE = r"^http://(localhost|127\.0\.0\.1)(:\d{1,5})?$"
@@ -261,6 +265,49 @@ def create_app(
         if path is None or not Path(path).is_file():
             raise HTTPException(status_code=404, detail="没有这段语音")
         return FileResponse(path, media_type="audio/wav")
+
+    def _asr_too_large() -> JSONResponse:
+        limit_mib = MAX_WAV_BYTES // (1024 * 1024)
+        return JSONResponse({"ok": False, "error": f"音频太大（上限 {limit_mib} MiB）"}, status_code=413)
+
+    @app.post("/mas3d/api/asr")
+    async def asr(request: Request, _: None = Depends(require_token)) -> JSONResponse:
+        """把一段 WAV 交给本地 Whisper 转成文本（design.md D18）。
+
+        体积校验做两次：Content-Length 已超限就先拒，分块上传读完 body 再拒。
+        错误语义：坏 WAV 400（带原始原因）、模型不可用 503、等锁超时 503（语音识别忙）、
+        推理超时 504。
+        """
+        declared = request.headers.get("content-length")
+        if declared is not None:
+            try:
+                if int(declared) > MAX_WAV_BYTES:
+                    return _asr_too_large()
+            except ValueError:
+                pass
+        raw = await request.body()
+        if len(raw) > MAX_WAV_BYTES:
+            return _asr_too_large()
+
+        recognize = getattr(runner, "handle_asr", None)
+        if not callable(recognize):
+            return JSONResponse({"ok": False, "error": "语音识别不可用"}, status_code=503)
+        try:
+            transcript = await asyncio.wait_for(recognize(raw), timeout=ASR_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            return JSONResponse({"ok": False, "error": "语音识别超时"}, status_code=504)
+        except AsrBusy:
+            # 等锁没排上号：这不是推理超时，重试就有机会成功。
+            return JSONResponse({"ok": False, "error": "语音识别忙，稍后再试"}, status_code=503)
+        except AsrUnavailable:
+            return JSONResponse({"ok": False, "error": "语音识别不可用"}, status_code=503)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc) or "音频不合法"}, status_code=400)
+        except RuntimeError:
+            return JSONResponse({"ok": False, "error": "语音识别不可用"}, status_code=503)
+        if not isinstance(transcript, dict):
+            return JSONResponse({"ok": False, "error": "语音识别不可用"}, status_code=503)
+        return JSONResponse({"ok": True, "asr": transcript})
 
     @app.websocket("/mas3d/ws")
     async def conversation(websocket: WebSocket) -> None:
@@ -498,6 +545,7 @@ class LocalServer:
 
 
 __all__ = [
+    "ASR_TIMEOUT_S",
     "LOCAL_HOSTS",
     "LocalServer",
     "MAX_HISTORY",

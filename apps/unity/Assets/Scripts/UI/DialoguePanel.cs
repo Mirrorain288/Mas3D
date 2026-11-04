@@ -83,6 +83,24 @@ namespace Mas3D.UI
             }
         }
 
+        /// <summary>
+        /// 焦点是不是在输入框里（含 TextField 内部的 TextElement，玩家真实输入时焦点在那一层）。
+        /// 语音键靠它让路：在面板里打字时按 V 是输入字符，不该开关录音。树没挂上时一律 false。
+        /// </summary>
+        public bool IsInputFocused
+        {
+            get
+            {
+                EnsureBound();
+                if (_input == null || _input.panel == null) return false;
+                var controller = _input.panel.focusController;
+                if (controller == null) return false;
+                var focused = controller.focusedElement as VisualElement;
+                if (focused == null) return false;
+                return focused == _input || _input.Contains(focused);
+            }
+        }
+
         /// <summary>输入框和发送按钮能不能用。等回复时为 false（重复提交防护的一半，另一半在控制器）。</summary>
         public bool Interactable
         {

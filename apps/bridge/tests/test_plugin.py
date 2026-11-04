@@ -44,6 +44,44 @@ def test_initialize_logs_version(plugin, caplog):
     ), [record.getMessage() for record in caplog.records]
 
 
+def test_initialize_shares_one_voice_lock(plugin):
+    """TTS 与 ASR 必须拿同一把 asyncio.Lock：本机 GPU 同一时刻只跑一个后端。"""
+    instance = plugin.Mas3dGamePlugin(context=None)
+    asyncio.run(instance.initialize())
+
+    lock = instance._voice_lock
+    assert isinstance(lock, asyncio.Lock)
+    assert instance.tts is not None
+    assert instance.tts._lock is lock
+    assert instance.asr is not None
+    assert instance.asr._lock is lock
+
+
+def test_handle_asr_delegates_to_asr_client(plugin):
+    instance = plugin.Mas3dGamePlugin(context=None)
+    asyncio.run(instance.initialize())
+
+    class _StubAsr:
+        def __init__(self) -> None:
+            self.calls: list[bytes] = []
+
+        async def transcribe(self, raw: bytes) -> dict:
+            self.calls.append(raw)
+            return {"text": "你好", "language": "zh", "durationMs": 10, "model": "small"}
+
+    stub = _StubAsr()
+    instance.asr = stub
+    result = asyncio.run(instance.handle_asr(b"RIFF....WAVE"))
+    assert result["text"] == "你好"
+    assert stub.calls == [b"RIFF....WAVE"]
+
+
+def test_handle_asr_before_initialize_raises(plugin):
+    instance = plugin.Mas3dGamePlugin(context=None)
+    with pytest.raises(RuntimeError):
+        asyncio.run(instance.handle_asr(b"RIFF....WAVE"))
+
+
 def test_metadata_matches_module(plugin):
     meta = read_metadata()
     assert meta["name"] == plugin.PLUGIN_NAME

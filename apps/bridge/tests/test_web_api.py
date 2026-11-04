@@ -693,3 +693,289 @@ def test_post_session_runtime_error_503(web_api, make_client):
         json={"mode": "shared"},
     )
     assert response.status_code == 503
+
+
+ASR_RESULT = {"text": "你好呀。", "language": "zh", "durationMs": 1500, "model": "small"}
+
+
+class AsrRunner(StubRunner):
+    """带语音识别后端的 runner：记录收到的原始字节，可注入异常。"""
+
+    def __init__(self, result: dict | None = None, *, error: Exception | None = None, **kwargs):
+        super().__init__(**kwargs)
+        self.asr_result = result if result is not None else dict(ASR_RESULT)
+        self.asr_error = error
+        self.asr_calls: list[bytes] = []
+
+    async def handle_asr(self, raw: bytes) -> dict:
+        self.asr_calls.append(raw)
+        if self.asr_error is not None:
+            raise self.asr_error
+        return self.asr_result
+
+
+@pytest.fixture(scope="module")
+def asr_module(plugin):
+    return importlib.import_module("astrbot_plugin_mas3d_game.asr")
+
+
+def test_asr_timeout_budget_is_45s(web_api):
+    assert web_api.ASR_TIMEOUT_S == 45.0
+
+
+def test_asr_without_token_401(web_api, make_client):
+    client = make_client(AsrRunner())
+    assert client.post("/mas3d/api/asr", content=b"RIFF....WAVE").status_code == 401
+
+
+def test_asr_from_remote_host_403(web_api):
+    app = web_api.create_app(AsrRunner(), TOKEN)
+    client = TestClient(app, client=("10.1.2.3", 5000))
+    try:
+        response = client.post(
+            "/mas3d/api/asr",
+            content=b"RIFF....WAVE",
+            headers={"Authorization": f"Bearer {TOKEN}"},
+        )
+    finally:
+        client.close()
+    assert response.status_code == 403
+    assert response.json() == {"ok": False, "error": "只接受本机请求"}
+
+
+def test_asr_bad_wav_400_with_original_message(plugin, web_api, make_client):
+    """坏音频走真实 AsrClient：decode_wav 的 ValueError 原文要透给前端。"""
+    asr = importlib.import_module("astrbot_plugin_mas3d_game.asr")
+
+    class RealAsrRunner(StubRunner):
+        def __init__(self):
+            super().__init__()
+            self.client = asr.AsrClient(loader=lambda name: pytest.fail("坏音频不该加载模型"))
+
+        async def handle_asr(self, raw: bytes) -> dict:
+            return await self.client.transcribe(raw)
+
+    response = make_client(RealAsrRunner()).post(
+        "/mas3d/api/asr",
+        content=b"not a wav at all",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 400
+    assert response.json() == {"ok": False, "error": "不是 RIFF/WAVE 数据"}
+
+
+def test_asr_oversized_content_length_413(web_api, make_client, asr_module):
+    runner = AsrRunner()
+    response = make_client(runner).post(
+        "/mas3d/api/asr",
+        content=b"\0" * (asr_module.MAX_WAV_BYTES + 1),
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 413
+    assert response.json() == {"ok": False, "error": "音频太大（上限 8 MiB）"}
+    # 声明超限就该在读过 body 之前拒绝，别把 8 MiB 搬进内存
+    assert runner.asr_calls == []
+
+
+def test_asr_oversized_content_length_rejects_before_reading_body(web_api, make_client, asr_module, monkeypatch):
+    """声明的 Content-Length 超限、实际只发 4 字节：只有预检能给 413。
+
+    读完之后的那道体积检查在这里放行（4 字节远小于上限），所以删掉预检这条用例
+    会变成 200——它单独钉住「读 body 之前就拒」，不再和 chunked 用例互相掩护。
+    """
+    import starlette.requests
+
+    reads: list[int] = []
+    original_body = starlette.requests.Request.body
+
+    async def recording_body(self):
+        reads.append(1)
+        return await original_body(self)
+
+    monkeypatch.setattr(starlette.requests.Request, "body", recording_body)
+
+    runner = AsrRunner()
+    response = make_client(runner).post(
+        "/mas3d/api/asr",
+        content=b"RIFF",  # 真正发出的 body 只有 4 字节
+        headers={
+            "Authorization": f"Bearer {TOKEN}",
+            "Content-Length": str(asr_module.MAX_WAV_BYTES + 1),
+        },
+    )
+    assert response.status_code == 413
+    assert response.json() == {"ok": False, "error": "音频太大（上限 8 MiB）"}
+    assert reads == []  # body 一次都没被读
+    assert runner.asr_calls == []
+
+
+def test_asr_oversized_chunked_body_413(web_api, make_client, asr_module):
+    """分块上传没有 Content-Length：读完 body 之后仍要按体积再拒一次。"""
+    runner = AsrRunner()
+    chunk = b"\0" * (1024 * 1024)
+    body = [chunk] * 8 + [b"\0" * 1024]
+    response = make_client(runner).post(
+        "/mas3d/api/asr",
+        content=iter(body),
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 413
+    assert response.json() == {"ok": False, "error": "音频太大（上限 8 MiB）"}
+    assert runner.asr_calls == []
+
+
+def test_asr_503_without_backend(web_api, make_client):
+    """runner 没有 handle_asr：503，绝不能让 AttributeError 变成 500。"""
+    response = make_client(StubRunner()).post(
+        "/mas3d/api/asr",
+        content=b"RIFF....WAVE",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 503
+    assert response.json() == {"ok": False, "error": "语音识别不可用"}
+
+
+def test_asr_503_when_backend_is_not_callable(web_api, make_client):
+    runner = StubRunner()
+    runner.handle_asr = "不是函数"
+    response = make_client(runner).post(
+        "/mas3d/api/asr",
+        content=b"RIFF....WAVE",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 503
+    assert response.json() == {"ok": False, "error": "语音识别不可用"}
+
+
+def test_asr_maps_unavailable_503(plugin, web_api, make_client, asr_module):
+    runner = AsrRunner(error=asr_module.AsrUnavailable("small 与 tiny 都加载失败"))
+    response = make_client(runner).post(
+        "/mas3d/api/asr",
+        content=b"RIFF....WAVE",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 503
+    assert response.json() == {"ok": False, "error": "语音识别不可用"}
+
+
+def test_asr_maps_timeout_504(web_api, make_client):
+    runner = AsrRunner(error=asyncio.TimeoutError())
+    response = make_client(runner).post(
+        "/mas3d/api/asr",
+        content=b"RIFF....WAVE",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 504
+    assert response.json() == {"ok": False, "error": "语音识别超时"}
+
+
+def test_asr_maps_busy_503(plugin, web_api, make_client, asr_module):
+    """等锁超时是「忙」，不是「超时」：503 + 让前端稍后再试的文案。"""
+    runner = AsrRunner(error=asr_module.AsrBusy("语音识别忙"))
+    response = make_client(runner).post(
+        "/mas3d/api/asr",
+        content=b"RIFF....WAVE",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 503
+    assert response.json() == {"ok": False, "error": "语音识别忙，稍后再试"}
+
+
+def test_asr_busy_while_lock_is_held_returns_503(web_api, make_client, asr_module, monkeypatch):
+    """锁被另一段合成占着：真实 AsrClient 按 LOCK_WAIT_S 快速失败，路由回 503。"""
+    monkeypatch.setattr(asr_module, "LOCK_WAIT_S", 0.05)
+    lock = asyncio.Lock()
+
+    class BusyRunner(StubRunner):
+        def __init__(self):
+            super().__init__()
+            self.client = asr_module.AsrClient(
+                lock=lock, loader=lambda name: pytest.fail("没排上号不该加载模型")
+            )
+
+        async def _hold_lock(self) -> None:
+            async with lock:
+                await asyncio.sleep(30.0)
+
+        async def handle_asr(self, raw: bytes) -> dict:
+            holder = asyncio.create_task(self._hold_lock())
+            try:
+                await asyncio.sleep(0.01)  # 让 holder 先把锁拿走
+                return await self.client.transcribe(raw)
+            finally:
+                holder.cancel()
+
+    started = time.monotonic()
+    response = make_client(BusyRunner()).post(
+        "/mas3d/api/asr",
+        content=b"RIFF....WAVE",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 503
+    assert response.json() == {"ok": False, "error": "语音识别忙，稍后再试"}
+    assert time.monotonic() - started < 5.0  # 不是等满 45 s 推理预算
+
+
+def test_asr_busy_with_another_small_wait_budget_still_returns_503(web_api, make_client, asr_module, monkeypatch):
+    """换一个非字面量的小预算（0.2 s）再走一遍：等待时长真按 LOCK_WAIT_S 走，不是写死 0.05。"""
+    monkeypatch.setattr(asr_module, "LOCK_WAIT_S", 0.2)
+    lock = asyncio.Lock()
+    loaded: list[str] = []
+
+    class QueuedBusyRunner(StubRunner):
+        def __init__(self):
+            super().__init__()
+            self.client = asr_module.AsrClient(lock=lock, loader=loaded.append)
+
+        async def _hold_lock(self) -> None:
+            async with lock:
+                await asyncio.sleep(30.0)
+
+        async def handle_asr(self, raw: bytes) -> dict:
+            holder = asyncio.create_task(self._hold_lock())
+            try:
+                await asyncio.sleep(0.01)  # 让 holder 先把锁拿走
+                return await self.client.transcribe(raw)
+            finally:
+                holder.cancel()
+
+    started = time.monotonic()
+    response = make_client(QueuedBusyRunner()).post(
+        "/mas3d/api/asr",
+        content=b"RIFF....WAVE",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    elapsed = time.monotonic() - started
+    assert response.status_code == 503
+    assert response.json() == {"ok": False, "error": "语音识别忙，稍后再试"}
+    assert loaded == []  # 等锁超时等于本次识别没开始：loader 一次都不该被调用
+    assert 0.15 <= elapsed < 5.0  # 真的等了这个常量（既不是 15 s 默认值，也不是写死的 0.05）
+
+
+def test_asr_slow_backend_hits_timeout_budget_504(web_api, make_client, monkeypatch):
+    class SlowAsrRunner(AsrRunner):
+        async def handle_asr(self, raw: bytes) -> dict:
+            await asyncio.sleep(1.0)
+            return await super().handle_asr(raw)
+
+    monkeypatch.setattr(web_api, "ASR_TIMEOUT_S", 0.05)
+    response = make_client(SlowAsrRunner()).post(
+        "/mas3d/api/asr",
+        content=b"RIFF....WAVE",
+        headers={"Authorization": f"Bearer {TOKEN}"},
+    )
+    assert response.status_code == 504
+    assert response.json() == {"ok": False, "error": "语音识别超时"}
+
+
+def test_asr_returns_transcript_200(web_api, make_client):
+    runner = AsrRunner()
+    audio = b"RIFF....WAVEfmt " + b"\0" * 32
+    response = make_client(runner).post(
+        "/mas3d/api/asr",
+        content=audio,
+        headers={"Authorization": f"Bearer {TOKEN}", "Content-Type": "audio/wav"},
+    )
+    assert response.status_code == 200
+    assert response.json() == {"ok": True, "asr": ASR_RESULT}
+    assert runner.asr_calls == [audio]

@@ -183,6 +183,7 @@ class TtsClient:
         cache_limit: int = CACHE_LIMIT,
         transport=None,
         translator=None,
+        lock: asyncio.Lock | None = None,
         clock=time.monotonic,
     ) -> None:
         self.cache_dir = Path(cache_dir)
@@ -198,6 +199,10 @@ class TtsClient:
         self._transport = transport
         self._translator = translator
         self._clock = clock
+        # 可选的跨后端共享锁：本插件的语音识别与合成共用一把，正常情况下二者不会同时在 GPU 上跑。
+        # 只覆盖这两个后端：AstrBot 的 QQ 语音在锁外（见 BASE_PARAMS 注释）；而且取消一条
+        # synthesize 会在子进程收尾前就放锁，下一段语音可能与它短暂重叠——已知欠账。
+        self._lock = lock
         self._semaphore = asyncio.Semaphore(1)
         self._weights_lock = asyncio.Lock()
         self._weights_ready = False
@@ -329,6 +334,13 @@ class TtsClient:
 
     # --- 合成 -----------------------------------------------------------------
     async def synthesize(self, text: str, sentence: int | None = None) -> dict:
+        """合成入口：配了共享锁就把整段流程（翻译、缓存、请求）包进锁里。"""
+        if self._lock is None:
+            return await self._synthesize(text, sentence)
+        async with self._lock:
+            return await self._synthesize(text, sentence)
+
+    async def _synthesize(self, text: str, sentence: int | None = None) -> dict:
         cleaned = sanitize_for_tts(text or "")
         if not cleaned:
             raise TtsUnavailable("台词里没有可合成的字符")
