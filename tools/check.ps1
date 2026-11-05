@@ -1,10 +1,10 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Mas3D full regression in one command: web, bridge, Unity EditMode, Unity PlayMode, smoke.
+  Mas3D full regression in one command: web, bridge, Unity EditMode, Unity PlayMode, smoke, player.
 
 .DESCRIPTION
-  Five gates, run in order. Every gate is judged by the child process exit code alone; the
+  Six gates, run in order. Every gate is judged by the child process exit code alone; the
   log text is written for humans to read afterwards, never grepped to decide a verdict. So a
   stale or cleverly worded log line cannot turn a red run green.
 
@@ -13,6 +13,11 @@
     unity-edit  powershell -File tools/unity.ps1 test -Mode EditMode
     unity-play  powershell -File tools/unity.ps1 test -Mode PlayMode
     smoke       powershell -File tools/unity.ps1 smoke
+    player      powershell -File tools/player-smoke.ps1
+
+  The player gate boots build/Mas3D.exe with -selftest and reads the marker file the exe
+  writes; it starts its own mock bridge on a free port, so nothing else has to be running.
+  Its exit code 2 means SKIP (no build, no node) and is reported as SKIP, never as a pass.
 
   Output: one line per step, "<step> <PASS|FAIL|SKIP> exit=<n> <seconds>s", then one
   "summary: <passed>/<ran> ok" line. Exit code 0 when nothing failed, 1 when any step failed.
@@ -33,6 +38,9 @@
 
 .PARAMETER SkipSmoke
   Skip the smoke step.
+
+.PARAMETER SkipPlayer
+  Skip the player (packaged exe self-test) step.
 
 .PARAMETER Python
   Python interpreter with pytest installed. Lookup order: -Python, then $env:MAS3D_PYTHON,
@@ -58,6 +66,7 @@ param(
     [switch]$SkipBridge,
     [switch]$SkipUnity,
     [switch]$SkipSmoke,
+    [switch]$SkipPlayer,
     [string]$Python = '',
     [int]$Timeout = 0
 )
@@ -242,6 +251,33 @@ if ($SkipSmoke) {
 }
 else {
     Invoke-UnityStep -Name 'smoke' -LogName 'check-smoke.log' -Arguments @('smoke')
+}
+
+# --- 6. player --------------------------------------------------------------
+if ($SkipPlayer) {
+    Set-StepSkip 'player'
+}
+else {
+    $playerExe = Join-Path $repoRoot 'build/Mas3D.exe'
+    if (-not (Test-Path $playerExe)) {
+        # 玩家包不是每次都在。缺产物算 SKIP：不伪装成通过，也不让一次没打包的全回归变红。
+        Set-StepSkip 'player' 'player SKIP (no build/Mas3D.exe)'
+    }
+    else {
+        $log = Join-Path $logDir 'check-player.log'
+        $playerSmoke = Join-Path $PSScriptRoot 'player-smoke.ps1'
+        $cliArgs = @('-ExecutionPolicy', 'Bypass', '-File', (Quote $playerSmoke))
+        $watch = [System.Diagnostics.Stopwatch]::StartNew()
+        $code = Invoke-Child -File $shell -ArgumentList $cliArgs -Log $log
+        $watch.Stop()
+        if ($code -eq 2) {
+            # player-smoke 只在自己 SKIP 时给 2（缺 exe、缺 node）；那同样不是通过。
+            Set-StepSkip 'player' ('player SKIP (player-smoke reported SKIP, see ' + $log + ')')
+        }
+        else {
+            Set-StepOutcome -Name 'player' -Code $code -Seconds $watch.Elapsed.TotalSeconds -Log $log
+        }
+    }
 }
 
 if ($script:fails.Count -gt 0) {

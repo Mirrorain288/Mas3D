@@ -221,11 +221,29 @@ switch ($Action) {
         if ($bad) { exit 1 }
     }
     'build'     {
+        if ($Target -ne 'StandaloneWindows64') {
+            throw ("build arm only produces StandaloneWindows64 (got {0}); the player settings in CliBuild are Windows-only" -f $Target)
+        }
         $outPath = if ([System.IO.Path]::IsPathRooted($Out)) { $Out } else { Join-Path $repoRoot $Out }
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $outPath) | Out-Null
-        $args = @('build', $project, '--target', $Target, '-o', $outPath, '--no-tail')
-        if ($Timeout -gt 0) { $args += @('--timeout', "$Timeout") }
-        Invoke-Unity $args
+        $parentDir = Split-Path -Parent $outPath
+        New-Item -ItemType Directory -Force -Path $parentDir | Out-Null
+        # 'unity build' cannot take -executeMethod, so the arm goes through the editor entry point.
+        # No -nographics: an IL2CPP player build initialises the graphics device.
+        $extra = @('-out', $outPath)
+        if ($Rest -contains '-dev') { $extra += '-dev' }
+        Invoke-Batch 'Mas3D.Editor.CliBuild.Build' -Extra $extra -Gpu
+        # The batch step throws on a non-zero editor exit, but an exit code alone is not proof
+        # that a player came out, so the artifacts are checked here without parsing the log.
+        $dataDir = Join-Path $parentDir (([System.IO.Path]::GetFileNameWithoutExtension($outPath)) + '_Data')
+        $il2cppDir = Join-Path $dataDir 'il2cpp_data'
+        $missing = @()
+        if (-not (Test-Path $outPath)) { $missing += $outPath }
+        if (-not (Test-Path $il2cppDir)) { $missing += $il2cppDir }
+        if ($missing.Count -gt 0) {
+            Write-Host ("build arm: player artifacts missing: {0}" -f ($missing -join ', '))
+            exit 1
+        }
+        Write-Host ("build arm: {0} + {1} ready" -f $outPath, (Split-Path -Leaf $dataDir))
     }
     'run'       {
         $args = @('run', $project)

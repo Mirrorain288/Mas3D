@@ -213,7 +213,7 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 
 ### 5.21 P5 回归（2026-11-04 实测）
 
-- **两条命令的分工**：`tools/unity.ps1 smoke` 只跑选定的两条链路（两次 Unity 批处理，串行）；`tools/check.ps1` 是五步全回归（web → bridge → unity-edit → unity-play → smoke），最后一步就是前者。日常改动用 `smoke`（约 3 分钟），交付前跑 `check.ps1`（约 9 分钟）。
+- **两条命令的分工**：`tools/unity.ps1 smoke` 只跑选定的两条链路（两次 Unity 批处理，串行）；`tools/check.ps1` 是六步全回归（web → bridge → unity-edit → unity-play → smoke → player），第五步就是前者（这一节写于 P5，第六门 `player` 是 P6 加的，见 §5.22）。日常改动用 `smoke`（约 3 分钟），交付前跑 `check.ps1`（约 9–12 分钟）。
 - **`smoke` 的两个阶段**（各自一次 `unity test --mode PlayMode --filter <用例全名>`，各留一份 XML 与 marker）：
 
 | 阶段 | 用例 | marker 文件 | marker 必须有的行 |
@@ -238,6 +238,36 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - **两个已知摩擦**（都不影响判据）：
   1. `apps/bridge/pytest.ini` 的 `addopts = -q` 叠加命令里显式写的 `-q` 成了双 quiet：`apps/unity/Logs/check-bridge.log` 里只有 169 个点和 `[100%]`，**没有「169 passed」摘要行**。想看摘要就临时去掉 `-q` 跑同一命令（`apps/unity/Logs/check-bridge-verbose.log`，实测 `169 passed in 9.97s`）；判红仍然只看退出码。
   2. bridge 用哪个解释器由 `$env:MAS3D_PYTHON` 传入（`-Python` 优先，其次环境变量，最后 PATH 里的 `python`，每个候选先 `-c "import sys"` 实跑验证）；都没配好就打 `bridge SKIP (no python; set MAS3D_PYTHON)` 并进 `note:` 行，**不算失败**。所以读 `summary: 5/5 ok` 之前先看分母——有 SKIP 时会变成 `3/3`、`1/1` 甚至 `0/0`。
+
+### 5.22 P6 出包（2026-11-05 实测）
+
+- **一条命令出包**：`powershell -ExecutionPolicy Bypass -File tools/unity.ps1 build`。`-Out` 默认 `build/Mas3D.exe`（相对仓库根），`-Target` 只接受 `StandaloneWindows64`（别的值直接 throw，`CliBuild` 里的设置本来就是 Windows-only），`-dev` 透传开发版，`-Timeout` 照旧管这一批。入口是 `apps/unity/Assets/Editor/CliBuild.cs` 的 `Mas3D.Editor.CliBuild.Build()`——`unity build` 子命令不收 `-executeMethod`，所以走 `run -- -executeMethod`。脚本跑完自己 `Test-Path` 两个产物（exe 与 `<name>_Data/il2cpp_data`），缺任一条打印 `build arm: player artifacts missing: …` 并 `exit 1`：退出码和产物是两道独立的门，编辑器说成功不算数。
+- **产物**（2026-11-05 首建）：`build/Mas3D.exe` 667,136 B；`build/Mas3D_Data/` 186,630,142 B / 19 个文件；整包（不含 `Mas3D_BackUpThisFolder_ButDontShipItWithYourGame`）28 个文件 **259.4 MB**。大件：`GameAssembly.dll` 37,518,848、`UnityPlayer.dll` 38,724,016、`sharedassets0.assets` 138,500,252。`Mas3D_Data/app.info` 是两行 `Mas3D`（productName / companyName）。
+- **IL2CPP 的证据**：`GameAssembly.dll` 在、`MonoBleedingEdge/` 不在、`Mas3D_Data/il2cpp_data` 存在（4 个文件 11,315,062 B）。旧 Mono 包正好相反：`_Data/Managed/` 里 30+ 个 dll（含 `mscorlib.dll` 4,632,064），`il2cpp_data` 不存在。
+- **PlayerSettings 由 CliBuild 写**（不是手改 `.asset`）：`productName` / `companyName` = `Mas3D`，1280×720 窗口、`resizableWindow`、`runInBackground`，`scriptingBackend` 的 `Standalone: 1`（IL2CPP）、`managedStrippingLevel` 的 `Standalone: 1`（Low）、`il2cppCompilerConfiguration` 的 `Standalone: 1`（Release），随后 `AssetDatabase.SaveAssets()`。`ProjectSettings.asset` 的就是 `git diff --cached --numstat` 里的 13 增 10 删（含 `fullscreenMode` 1→3、`defaultScreenWidth/Height` 1280/720、`m_ActiveColorSpace` 不动）；`apiCompatibilityLevelPerPlatform` 保持 `{}`——Unity 6 默认 .NET Standard 2.1，枚举里已经没有 `NET_Standard_2_1` 这个名字。
+- **耗时**：首建墙钟 **3 分 54 秒**（19:26:35 → 19:30:29），其中 CliBuild 自己记 `elapsed=184.7`（编辑器启动 + 脚本重编译约 50 s）；不动脚本的复跑增量 `elapsed=11.5`。所以「改一行 C# 再看包」是一分钟级的事，只有第一次和清缓存后才是四分钟。
+- **换机的第一条前提**：IL2CPP 模块不在编辑器默认安装里，缺了构建只报 `Error building Player: Currently selected scripting backend (IL2CPP) is not installed.`。装它：`unity install-modules -e 6000.6.7f1 -m windows-il2cpp --accept-eula -y --no-elevate --retries 2`。本机实测下载 258.93 MB、落地 1.04 GB（日志 `apps/unity/Logs/p6-install-il2cpp.log`）。这是**机器级**改动、不在仓库里，换机器与 CI 都要重跑；注意 `WindowsStandaloneSupport/Variations/il2cpp` 只是编辑器侧引擎 DLL，不代表 player 变体已装。
+- **输出目录不许跨后端复用**：同一个 `-Out` 目录里放过 Mono 包，再切 IL2CPP 会 `BuildFailedException: Build path contains a project previously built with the Mono2x scripting backend`。脚本不自动清目录（怕误删），换后端时先换目录或手工清空。
+- **启动顺序（P6 的核心承诺）**：先让 AstrBot 起来（插件自起 `127.0.0.1:8790`），再启动 exe。反了不会崩、也不会黑屏：提示条走失败态 `连不上桥接 127.0.0.1:8790（第 n 次，x s 后重试）· 先启动 AstrBot，确认 bridge 正在监听`（`ConnectionBanner.cs:28`），后台按 `0.5 / 1 / 2 / 4 / 8` s 退避重连（`BridgeSettings.BackoffSeconds`，用完一直按 8 s），桥接一起来就自动连上、`attempt` 归零。这是纯重连逻辑，不需要重启 exe。
+- **打包件的令牌（双击就能连，P6 Task 5 修的缺陷）**：`DialogueBridge` 按 `BridgeSettings.RuntimeTokenCandidates()` 的顺序逐个试，**取第一个非空**，成功时打 `[dialogue] token <- <路径>`；`-token` 给的仍然最高优先（来源记成 `-token`）。顺序由一个纯函数 `BridgeSettings.TokenCandidates(exeDir, repoRoot, persistentDir)` 决定，EditMode 有 5 条测试钉住：
+  1. `<仓库>/apps/bridge/data/mas3d/token`——编辑器里，以及 exe 就在仓库 `build/` 里时（player 的仓库根 = **exe 所在目录的上一级**，不再是 `Application.dataPath` 往上三层）；
+  2. `<exe 目录>/mas3d-token`——免安装整包拷贝；
+  3. `<persistentDataPath>/token`——装到仓库外时用户自己放一份。
+  修之前只认第一条，而且仓库根用 `Application.dataPath` 往上三层推：编辑器里 `apps/unity/Assets` → 仓库根（对），打包件里 `build/Mas3D_Data` → 盘符根（错），所以双击 `build\Mas3D.exe` 找不到令牌（`player-run.log` 里 `[voice] 没有令牌（D:\apps\bridge\data\mas3d\token）`、marker 里没有 `token src=`）。线上红证：`task5-red-1.log` 里 `player FAIL (online) exit=3 45.6s` + `bridge timeout elapsed=45.0`——不传 `-token` 时客户端根本不建。
+  一个候选都没有时不建客户端，状态行「桥接未配置令牌」，警告里列出**试过的全部路径**；房间、走动、动作、离线兜底都照常，断的只有桥接。
+- **三个启动参数**（`Scripts/Boot/BootArgs.cs`；编辑器和打包件都认，其余参数一律忽略，`-batchmode` / `-logFile` 这类 Unity 自己的参数认不出来不算错）：
+  - `-bridge host:port` 或 `-bridge port`：只给端口时主机是 `127.0.0.1`；端口非法只打一条警告并回落 `127.0.0.1:8790`，不把「地址写错」伪装成「连上了但没反应」。
+  - `-token <str>`：临时令牌，优先于磁盘那份（日志只打字节数，不打内容）。
+  - `-selftest <path>`：自检模式的落盘路径。只有**命令行带这个参数**才挂 `PlayerSelfTest`（`RoomBootstrap.cs:133` 只看参数非空），所以打包件双击、编辑器日常运行、既有测试都不受影响；但编辑器里真去带 `-selftest` 会走到 `PlayerSelfTest.cs:280-281` 的兜底 `Application.Quit` / `Environment.Exit`，可能直接结束编辑器进程——那是给打包件用的开关，别在编辑器里用。
+  启动时 `RoomBootstrap` 打一行 `[boot] … bridge=… token=disk|set`，排查先看它。
+- **玩家包自检**（`tools/player-smoke.ps1`，跑的是 `build/Mas3D.exe`，不是编辑器）：
+  - 在线（默认）：脚本从 8791 起找一个空闲端口，自起 `node tools/mock-bridge.mjs --port <p> --scenario happy`，再用 `-bridge 127.0.0.1:<p> -selftest <marker>` 起 exe——**不传 `-token`**，走的正是双击那条路；判据 = 退出码 0 + marker **五行**（`token src=<路径> len=64` / `bridge ok` / `reply ok len=<n>` / `action hands held=<x.xx> ok` / `done`）。实测 **exit=0 / 2.5 s**，marker 第一行 `token src=D:\Mas3D\apps\bridge\data\mas3d\token len=64`。`-WithToken` 保留一条覆盖 `-token` 的用例（判据换成 `token src=-token`），默认关。
+  - 短回复：`-Reply "嗯。"` 透传成 `mock-bridge.mjs --reply`，用来钉住「回没回」不靠面板变长——面板从 12 字占位文案变成 `你好\n嗯。`（5 字，比占位文案还短）也算回答。实测 **exit=0 / 2.4 s / `reply ok len=5`**。
+  - `-Offline`：不给桥接，判据 = 退出码 3 + `bridge timeout elapsed=<s>`。实测 **exit=3 / 45.6 s**（`elapsed=45.0`）。这条比在线那条更值钱：它证明连不上时会在 45 s 内自己退出，不会把全回归拖死。
+  - 其它：`-Exe`（默认 `build/Mas3D.exe`）、`-Timeout 150`、`-Reply <text>`、`-WithToken`；结果码 `0 PASS / 1 FAIL / 2 SKIP`（缺 exe，或在线模式缺 node）；`Process.Start` 抛异常时也打一行 `player FAIL (launch: …)` 再 `exit 1`，不会无声炸掉。从属日志 `player-run.log`（exe 自己）与 `player-mock.log`（mock）。
+  - **退出码只有一条路能给**：打包 player 里 `Application.Quit(code)` 根本不让进程退出，单独 `Environment.Exit(code)` 也不退（实测 45 s / 90 s 仍活着）；`PlayerSelfTest` 因此走 kernel32 `ExitProcess(code)`，3/4/5 才真交到 OS 手里。改这段之前先读 `tools/README.md` 那两条实测。
+- **check 的第六门**：`tools/check.ps1` 现在是六道门 `web → bridge → unity-edit → unity-play → smoke → player`，`player` 门调 `player-smoke.ps1`（日志 `check-player.log`），只按子进程退出码判；`-SkipPlayer` 跳过，缺 `build/Mas3D.exe` 或子进程给 2 都记 SKIP（进 `note: skipped …`，不进分母，不伪装成通过）。实测单开 player 门 `player PASS exit=0 6.7s` + `summary: 1/1 ok (5 skipped)`；门序 web+player `2/2 ok (4 skipped)`。完整一轮因此从约 9 分钟涨到 9–12 分钟。
+- **已知限制**：`-Target` 只有 Windows 一条腿（`CliBuild` 硬编码 `StandaloneWindows64` 与 `SetScriptingBackend(Standalone, IL2CPP)`）；产物里带 `Mas3D_BackUpThisFolder_ButDontShipItWithYourGame` 符号备份，发版别带；输出目录跨后端复用会炸（见上）。
 
 ## 6. 四件动作的验收判据（可测，不靠肉眼）
 

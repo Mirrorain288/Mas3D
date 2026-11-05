@@ -10,6 +10,9 @@
             <ui:Button name="export" text="导出" class="chip" />
             <ui:Button name="clear" text="清空" class="chip" />
         </ui:VisualElement>
+        <ui:VisualElement name="connection-banner" class="connection-banner" style="display: none; margin-top: 6px; padding-left: 8px; padding-right: 8px; padding-top: 4px; padding-bottom: 4px; border-radius: 6px; border-width: 0.5px; border-color: rgba(240, 160, 140, 0.5); background-color: rgba(240, 140, 120, 0.16);">
+            <ui:Label name="connection-text" text="" class="connection-text" style="font-size: 11px; white-space: normal; color: rgb(246, 196, 180);" />
+        </ui:VisualElement>
         <ui:ScrollView name="log" class="log">
             <ui:Label name="thinking" text="她正在想…" class="line thinking" />
         </ui:ScrollView>

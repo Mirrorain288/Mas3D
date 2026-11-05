@@ -3,7 +3,7 @@
  * 剧本化 mock 桥接服务：只用 WebSocket，按 packages/protocol 的 ServerFrame 发帧。
  * 这是 Task 9/10 的测试替身，真实桥接在 AstrBot 插件里（Task 10）。
  *
- *   node tools/mock-bridge.mjs --port 8787 --scenario happy|timeout|error|command [--token TOKEN]
+ *   node tools/mock-bridge.mjs --port 8787 --scenario happy|timeout|error|command [--token TOKEN] [--reply TEXT]
  */
 import { createHash, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
@@ -12,7 +12,7 @@ import { WebSocketServer } from "ws";
 const SCENARIOS = new Set(["happy", "timeout", "error", "command"]);
 
 function parseArgs(argv) {
-  const options = { port: 8787, scenario: "happy", token: null, host: "127.0.0.1", quiet: false };
+  const options = { port: 8787, scenario: "happy", token: null, host: "127.0.0.1", quiet: false, reply: null };
   for (let i = 0; i < argv.length; i += 1) {
     const flag = argv[i];
     const value = argv[i + 1];
@@ -28,10 +28,17 @@ function parseArgs(argv) {
     } else if (flag === "--host") {
       options.host = value;
       i += 1;
+    } else if (flag === "--reply") {
+      if (typeof value !== "string") {
+        process.stderr.write("--reply needs a value\n");
+        process.exit(2);
+      }
+      options.reply = value;
+      i += 1;
     } else if (flag === "--quiet") {
       options.quiet = true;
     } else if (flag === "--help" || flag === "-h") {
-      process.stdout.write("usage: node tools/mock-bridge.mjs [--port 8787] [--scenario happy|timeout|error|command] [--token T] [--host 127.0.0.1]\n");
+      process.stdout.write("usage: node tools/mock-bridge.mjs [--port 8787] [--scenario happy|timeout|error|command] [--token T] [--host 127.0.0.1] [--reply TEXT]\n");
       process.exit(0);
     } else {
       process.stderr.write("unknown argument: " + flag + "\n");
@@ -74,6 +81,8 @@ function cueFor(text) {
 }
 
 function replyFor(text) {
+  // --reply 只给冒烟用：短回复（例如「嗯。」）能证明自检不是靠"面板变长"判成功。
+  if (options.reply) return options.reply;
   if (text.includes("在吗")) return PREFIX + "我在呀，一直坐在这儿等你。";
   if (text.includes("手")) return PREFIX + "手吗？我可以抬起来给你看看。";
   return PREFIX + "我听到你说的「" + text.slice(0, 40) + "」了。外面的星空很安静，我们可以慢慢聊。";
@@ -304,7 +313,7 @@ function noteTurn() {
 const wss = new WebSocketServer({ server, path: "/mas3d/ws" });
 
 server.on("listening", () => {
-  log("listening on ws://" + options.host + ":" + options.port + "/mas3d/ws", "scenario=" + options.scenario, options.token ? "token=on" : "token=off");
+  log("listening on ws://" + options.host + ":" + options.port + "/mas3d/ws", "scenario=" + options.scenario, options.token ? "token=on" : "token=off", options.reply ? "reply=" + JSON.stringify(options.reply) : "reply=scripted");
 });
 
 wss.on("connection", (socket, request) => {

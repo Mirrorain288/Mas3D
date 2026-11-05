@@ -18,12 +18,30 @@
 
 ### Unity 版（主线）
 
+两步：先出包，再双击。
+
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools/unity.ps1 player   # 重建 Assets/Scenes/Main.unity（房间、玩家、相机、她）
-powershell -ExecutionPolicy Bypass -File tools/check.ps1          # 五步全回归：web → bridge → unity-edit → unity-play → smoke
+powershell -ExecutionPolicy Bypass -File tools/unity.ps1 build    # IL2CPP 出包到 build/Mas3D.exe（首建约 4 分钟，增量约十几秒）
 ```
 
-两条命令都会起 Unity 批处理：跑前关掉编辑器（单实例，撞锁只会 FAIL）。`check.ps1` 一轮约 9 分钟，日常改动用 `tools/unity.ps1 smoke`（约 3 分钟），分工见 spec §5.21。
+然后**先起 AstrBot、再双击 `build\Mas3D.exe`**：桥接（插件自起 `127.0.0.1:8790`）先监听，游戏一开就连上。顺序反了也不是死局——提示条会写「连不上桥接 … 先启动 AstrBot」，后台按 0.5/1/2/4/8 s 退避重连，桥接起来后自动连上，不用重开游戏。
+
+令牌不用手交：打包件按 `<仓库>/apps/bridge/data/mas3d/token`（exe 就在仓库 `build/` 里时就是这一份，仓库根取 exe 所在目录的上一级）→ `<exe 目录>/mas3d-token`（免安装拷贝）→ `<persistentDataPath>/token` 的顺序取第一个非空，找到时日志打 `[dialogue] token <- <路径>`。要临时换一份才用参数覆盖：
+
+```powershell
+build\Mas3D.exe -token (Get-Content apps/bridge/data/mas3d/token -Raw).Trim()
+```
+
+一个都找不到时也能进房间、走动、演动作，只是桥接断着（状态行「桥接未配置令牌」，警告里列出试过的全部路径）。参数、产物与换机前提见 spec §5.22。
+
+开发与回归：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/unity.ps1 player   # 重建 Assets/Scenes/Main.unity（房间、玩家、相机、她）
+powershell -ExecutionPolicy Bypass -File tools/check.ps1          # 六步全回归：web → bridge → unity-edit → unity-play → smoke → player
+```
+
+两条命令都会起 Unity 批处理：跑前关掉编辑器（单实例，撞锁只会 FAIL）。`check.ps1` 一轮约 9–12 分钟，日常改动用 `tools/unity.ps1 smoke`（约 3 分钟），分工见 spec §5.21。
 
 ### web 版（已归档，见 `apps/web/ARCHIVE.md`）
 

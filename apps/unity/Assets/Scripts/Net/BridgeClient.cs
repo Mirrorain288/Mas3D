@@ -9,7 +9,12 @@ using UnityEngine;
 
 namespace Mas3D.Net
 {
-    /// <summary>通道状态。<see cref="BridgeState.Waiting"/> 表示一句话已经发出、正在等这一轮的 reply/error。</summary>
+    /// <summary>
+    /// 通道状态。<see cref="BridgeState.Waiting"/> 表示一句话已经发出、正在等这一轮的 reply/error。
+    ///
+    /// <see cref="BridgeState.Failed"/> 是给 UI 选文案的展示态，不是状态机的一步：退避重连期间状态仍然停在
+    /// <see cref="BridgeState.Connecting"/>（RunAsync 的循环只在连上/断开时改状态），客户端从不 SetState 到它。
+    /// </summary>
     public enum BridgeState
     {
         Idle,
@@ -17,6 +22,9 @@ namespace Mas3D.Net
         Connected,
         Waiting,
         Closed,
+
+        /// <summary>失败/退避重试中，只由 UI 传进 ConnectionBanner.TextFor（见上）。</summary>
+        Failed,
     }
 
     /// <summary>

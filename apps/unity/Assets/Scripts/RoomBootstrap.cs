@@ -1,5 +1,7 @@
+using System;
 using Mas3D.Actions;
 using Mas3D.Avatar;
+using Mas3D.Boot;
 using Mas3D.Conversation;
 using Mas3D.Net;
 using Mas3D.UI;
@@ -48,10 +50,18 @@ namespace Mas3D
         public int ColliderCount { get; private set; }
         public AnchorTable Anchors { get; private set; }
 
+        /// <summary>Boot 解析出来的启动参数。Task 3 的自检模式靠它拿 SelfTestPath；空命令行时是默认值。</summary>
+        public BootArgs StartupArgs { get; private set; }
+
         void Start() => Boot();
 
         public void Boot()
         {
+            // 命令行的东西必须在别的组件读配置之前落下：DialogueBridge 的执行顺序是 100，它的 Start
+            // 晚于这里，所以 -bridge / -token 改的就是它随后要用的那份 BridgeSettings。
+            StartupArgs = BootArgs.Parse(Environment.GetCommandLineArgs());
+            ApplyStartupArgs(StartupArgs);
+
             if (Room != null && AttachColliders) ColliderCount = RoomColliders.Attach(Room);
             Anchors = AnchorTable.Load();
 
@@ -117,6 +127,41 @@ namespace Mas3D
             Actions.Camera = Rig;
 
             Debug.Log($"[room] colliders={ColliderCount} spawn={(anchor != null ? anchor.id : "none")} at={(anchor != null ? anchor.x.ToString("F2") + "," + anchor.z.ToString("F2") : "-")}");
+
+            // 自检只挂在 -selftest 上：它是玩家包的自动验收入口，编辑器里（命令行不带该参数）连组件都不创建，
+            // 场景与既有测试不受影响。放最后是因为它一挂上就要用上面接好的桥接、面板和导演。
+            if (!string.IsNullOrEmpty(StartupArgs.SelfTestPath) && GetComponent<PlayerSelfTest>() == null)
+                gameObject.AddComponent<PlayerSelfTest>();
+        }
+
+        /// <summary>
+        /// 把 -bridge / -token 落到场景里那块 BridgeSettings 上，再打一行"这局用的是哪个桥接"。
+        /// BridgeSettings 只有 Url（没有 Host/Port 字段），所以地址按 ws://host:port/mas3d/ws 拼回去；
+        /// 没给 -bridge 就原样不动，只在日志里报 Url 的端点。
+        /// </summary>
+        void ApplyStartupArgs(BootArgs boot)
+        {
+            var bridge = FindAnyObjectByType<DialogueBridge>();
+            var settings = bridge != null && bridge.Settings != null ? bridge.Settings : new BridgeSettings();
+
+            // 写 Url/Token 的逻辑在 BootArgs.ApplyTo 里（纯函数，EditMode 直接测得到）；这里只管找对象、打日志。
+            BootArgs.ApplyTo(settings, boot);
+
+            string host;
+            int port;
+            if (boot.HasBridge)
+            {
+                host = boot.Host;
+                port = boot.Port;
+            }
+            else
+            {
+                BootArgs.SplitUrl(settings.Url, out host, out port);
+            }
+
+            Debug.Log("[boot] bridge=" + host + ":" + port
+                + " token=" + (!string.IsNullOrEmpty(boot.Token) ? "set" : "disk")
+                + " selftest=" + (!string.IsNullOrEmpty(boot.SelfTestPath) ? boot.SelfTestPath : "none"));
         }
     }
 }

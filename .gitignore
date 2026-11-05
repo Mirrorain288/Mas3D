@@ -39,6 +39,7 @@ obj/
 [Tt]emp/
 [Oo]bj/
 [Bb]uilds/
+/build/
 [Ll]ogs/
 [Uu]serSettings/
 *.csproj
