@@ -17,6 +17,8 @@
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 player
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 avatarpose
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 capture
+  # smoke: one dialogue turn through the real mock bridge, then the five actions through the real scene
+  powershell -ExecutionPolicy Bypass -File tools/unity.ps1 smoke
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 test -Mode PlayMode
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 build -Out build/Mas3D.exe
 #>
@@ -140,29 +142,82 @@ switch ($Action) {
         Invoke-Unity $args
         Write-Host "results: $results"
     }
-    # One end-to-end PlayMode case against the real mock bridge. The case writes its marker to
-    # Logs/smoke-marker.txt: Debug.Log lands in the editor log, not the NUnit XML, so the file is
-    # the channel that survives the CLI. A green CLI is not trusted alone - the XML decides.
+    # Two serial PlayMode cases prove the release path end to end: one dialogue turn against the real
+    # mock bridge, then all five actions played once through the real scene and reset. Debug.Log lands
+    # in the editor log, not the NUnit XML, so each case writes a marker file - the one channel that
+    # survives the CLI. A green CLI is not trusted alone: the XML and the marker decide.
+    # The two chains do not depend on each other, so the second run still happens when the first fails;
+    # the command exits 1 when either side is bad.
     'smoke'     {
-        $results = Join-Path $project 'TestResults/Smoke.xml'
-        $marker = Join-Path $project 'Logs/smoke-marker.txt'
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $results) | Out-Null
-        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $marker) | Out-Null
-        if (Test-Path $marker) { Remove-Item -LiteralPath $marker -Force }
-        $args = @('test', $project, '--mode', 'PlayMode', '--output', $results, '--report-format', 'nunit', '--filter', 'Mas3D.Tests.PlayMode.BridgeSmokeTests.OneTurnAgainstTheRealMockBridge')
-        if ($Timeout -gt 0) { $args += @('--timeout', "$Timeout") }
+        $cases = @(
+            @{
+                Name    = 'bridge'
+                Filter  = 'Mas3D.Tests.PlayMode.BridgeSmokeTests.OneTurnAgainstTheRealMockBridge'
+                Results = 'TestResults/Smoke.xml'
+                Marker  = 'Logs/smoke-marker.txt'
+                Require = @('[smoke] turn ok')
+            },
+            @{
+                Name    = 'actions'
+                Filter  = 'Mas3D.Tests.ActionSmokeTests.EveryActionPlaysOnceThroughTheScene'
+                Results = 'TestResults/SmokeActions.xml'
+                Marker  = 'Logs/smoke-actions-marker.txt'
+                Require = @(
+                    '[smoke] action hands ',
+                    '[smoke] action pat-her ',
+                    '[smoke] action pat-me ',
+                    '[smoke] action kiss ',
+                    '[smoke] action sit-together '
+                )
+            }
+        )
         $bad = $false
-        try { Invoke-Unity $args } catch { $bad = $true; Write-Host $_.Exception.Message }
-        if (-not (Test-Path $results)) { $bad = $true }
-        elseif (Select-String -LiteralPath $results -Pattern 'result="Failed"|failed="[1-9]' -Quiet) { $bad = $true }
-        if (Test-Path $marker) {
-            Get-Content -LiteralPath $marker -Encoding UTF8 | Where-Object { $_ -match '\[(smoke|ui)\]' } | ForEach-Object { Write-Host $_ }
+        foreach ($case in $cases) {
+            $results = Join-Path $project $case.Results
+            $marker = Join-Path $project $case.Marker
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $results) | Out-Null
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $marker) | Out-Null
+            if (Test-Path $marker) { Remove-Item -LiteralPath $marker -Force }
+            $cliArgs = @('test', $project, '--mode', 'PlayMode', '--output', $results, '--report-format', 'nunit', '--filter', $case.Filter)
+            if ($Timeout -gt 0) { $cliArgs += @('--timeout', "$Timeout") }
+            Write-Host ("[smoke] {0}: {1}" -f $case.Name, $case.Filter)
+            try { Invoke-Unity $cliArgs } catch { $bad = $true; Write-Host $_.Exception.Message }
+            if (-not (Test-Path $results)) {
+                Write-Host ("[{0}] results missing: {1}" -f $case.Name, $results)
+                $bad = $true
+            }
+            else {
+                $failed = Select-String -LiteralPath $results -Pattern 'result="Failed"|failed="[1-9]'
+                foreach ($hit in $failed) {
+                    $text = $hit.Line.Trim()
+                    if ($text.Length -gt 300) { $text = $text.Substring(0, 300) + '...' }
+                    Write-Host ("[{0}] {1}" -f $case.Name, $text)
+                    $bad = $true
+                }
+                # A filter that matches nothing exits 0 and reports result="Passed" total="0": the
+                # XML alone would call that green, so an empty run is a failure of its own.
+                if (Select-String -LiteralPath $results -Pattern '<test-run [^>]*total="0"' -Quiet) {
+                    Write-Host ("[{0}] no test case ran: {1}" -f $case.Name, $case.Filter)
+                    $bad = $true
+                }
+            }
+            $seen = @()
+            if (Test-Path $marker) {
+                $seen = @(Get-Content -LiteralPath $marker -Encoding UTF8 | Where-Object { $_ -match '\[(smoke|ui)\]' })
+            }
+            else {
+                Write-Host ("[{0}] marker missing: {1}" -f $case.Name, $marker)
+                $bad = $true
+            }
+            foreach ($line in $seen) { Write-Host $line }
+            foreach ($needle in $case.Require) {
+                if (@($seen | Where-Object { $_.IndexOf($needle) -ge 0 }).Count -eq 0) {
+                    Write-Host ("[{0}] marker line missing: {1}" -f $case.Name, $needle)
+                    $bad = $true
+                }
+            }
+            Write-Host ("results: {0}" -f $results)
         }
-        else {
-            Write-Host '[smoke] marker missing: the case did not reach its last line'
-            $bad = $true
-        }
-        Write-Host "results: $results"
         if ($bad) { exit 1 }
     }
     'build'     {

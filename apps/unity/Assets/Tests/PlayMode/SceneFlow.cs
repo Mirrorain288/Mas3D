@@ -49,6 +49,17 @@ namespace Mas3D.Tests
             yield return SceneManager.LoadSceneAsync(SceneName, LoadSceneMode.Additive);
         }
 
+        /// <summary>
+        /// Waits for Boot() to wire the director, with a bound: an unbounded WaitUntil turns a broken
+        /// wiring into a hung suite (every later case times out) instead of one red case.
+        /// </summary>
+        internal static IEnumerator WaitForBoot(RoomBootstrap boot)
+        {
+            for (var i = 0; i < 120 && boot != null && boot.Actions == null; i++) yield return null;
+            Assert.IsNotNull(boot, "Main.unity 必须带 RoomBootstrap");
+            Assert.IsNotNull(boot.Actions, "Boot() 没接上 ActionDirector：等了 120 帧仍是 null");
+        }
+
         /// <summary>Unload it and wait for the unload to finish.</summary>
         internal static IEnumerator UnloadMain()
         {

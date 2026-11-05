@@ -9,17 +9,6 @@ namespace Mas3D.Tests
 {
     public class ActionSceneTests
     {
-        /// <summary>
-        /// Waits for Boot() to wire the director, with a bound: an unbounded WaitUntil turns a broken
-        /// wiring into a hung suite (every later case times out) instead of one red case.
-        /// </summary>
-        static IEnumerator WaitForBoot(RoomBootstrap boot)
-        {
-            for (var i = 0; i < 120 && boot != null && boot.Actions == null; i++) yield return null;
-            Assert.IsNotNull(boot, "Main.unity 必须带 RoomBootstrap");
-            Assert.IsNotNull(boot.Actions, "Boot() 没接上 ActionDirector：等了 2 s 仍是 null");
-        }
-
         static void RequireScene()
         {
             AvatarPrefabFixture.Require();
@@ -35,7 +24,7 @@ namespace Mas3D.Tests
             {
                 yield return SceneFlow.LoadMain();
                 var boot = Object.FindAnyObjectByType<RoomBootstrap>();
-                yield return WaitForBoot(boot);   // Boot() 在 Start 里跑；卡住就是没接线
+                yield return SceneFlow.WaitForBoot(boot);   // Boot() 在 Start 里跑；卡住就是没接线
                 Assert.AreSame(boot.Actor, boot.Actions.Actor, "导演必须接上同一个她");
                 Assert.AreSame(boot.Player, boot.Actions.Player, "导演必须接上场景里的玩家");
                 Assert.AreSame(boot.Rig, boot.Actions.Camera, "导演必须接上同一个相机架");
@@ -51,7 +40,7 @@ namespace Mas3D.Tests
             {
                 yield return SceneFlow.LoadMain();
                 var boot = Object.FindAnyObjectByType<RoomBootstrap>();
-                yield return WaitForBoot(boot);
+                yield return SceneFlow.WaitForBoot(boot);
                 Assert.IsTrue(boot.Actions.TryEnterAction(ActionId.Hands), "场景里的她坐在 S1 上，牵手必须能进场");
                 yield return null;
                 var seat = AnchorTable.Load().Seat("S1");
@@ -70,7 +59,7 @@ namespace Mas3D.Tests
             {
                 yield return SceneFlow.LoadMain();
                 var boot = Object.FindAnyObjectByType<RoomBootstrap>();
-                yield return WaitForBoot(boot);
+                yield return SceneFlow.WaitForBoot(boot);
                 var spawn = boot.Player.transform.position;
                 Assert.IsTrue(boot.Actions.TryEnterAction(ActionId.Hands));
                 yield return null;

@@ -211,6 +211,34 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - 验收（2026-11-04 终态）：`test -Mode PlayMode` **163 total / 162 passed / 0 failed / 1 skipped**（跳过的是 `[Explicit] BridgeSmokeTests.UiSceneShot`），`test -Mode EditMode` **44/44**，`-actions 1` exit 0 且五张动作图重出，`smoke` 一回合 `[smoke] turn ok turnId=ed3088c9-f231-441e-af29-3a26bb66d466`。收口轮**没有**再跑 `player`（它会把场景重新序列化一遍）；`player` 的上一次验证在 Task 8。
   判别力（变异，均已还原）：同时删掉 `Camera.MouseInput = false` 与席位检查的返回值 → `163 total / 160 passed / 2 failed`，红的正是 `TheKissFramesItsCloseUpInsteadOfSittingInHerHair` 与 `ABedSheCannotSitOnIsRefusedNotHalfEntered`。
 
+### 5.21 P5 回归（2026-11-04 实测）
+
+- **两条命令的分工**：`tools/unity.ps1 smoke` 只跑选定的两条链路（两次 Unity 批处理，串行）；`tools/check.ps1` 是五步全回归（web → bridge → unity-edit → unity-play → smoke），最后一步就是前者。日常改动用 `smoke`（约 3 分钟），交付前跑 `check.ps1`（约 9 分钟）。
+- **`smoke` 的两个阶段**（各自一次 `unity test --mode PlayMode --filter <用例全名>`，各留一份 XML 与 marker）：
+
+| 阶段 | 用例 | marker 文件 | marker 必须有的行 |
+| --- | --- | --- | --- |
+| 桥接 | `Mas3D.Tests.PlayMode.BridgeSmokeTests.OneTurnAgainstTheRealMockBridge` | `apps/unity/Logs/smoke-marker.txt` | `[smoke] turn ok`（同一行带 `turnId=`） |
+| 动作 | `Mas3D.Tests.ActionSmokeTests.EveryActionPlaysOnceThroughTheScene` | `apps/unity/Logs/smoke-actions-marker.txt` | `[smoke] action <id>` 五行，id 就是 `ActionId.All` 那五个 |
+
+- **动作冒烟测的是接线与复位，不是几何精度**：五件动作各演 `1.5 s`（`Step = 1/60`、`StepsPerAction = 90`），每件只断言 `Held ≥ MinHeld (1.4)`、`ContactError ≤ ContactTolerance`、marker 五行齐全，另外三条「确实演了」的判别（进场后玩家离出生点 > 0.05 m、四个手臂动作演完她右手位移 > 0.03 m、kiss 的 `Chest` 局部旋转变化 > 5°），然后 `Cancel()` 并确认 `Current == null`、键盘锁还回去、座位回到 S1（髋位水平距离 < 0.02 m）。掌心残差 `≤ 0.02 m`、`Held ≥ 3.0 s`、腿骨下限、髋高这些几何判据在 `Action*Tests` 里逐条钉——冒烟只证明「五件动作都能从场景入口进、都能干净退出」。marker 每行都带当轮的 `held` 与 `gap` 实测值，文件是 `apps/unity/Logs/smoke-actions-marker.txt`，**每次跑都会重写，以当轮文件为准**（`gap` 随呼吸相位在 0.000–0.016 m 之间浮动）。这两个数只记录、不当几何判据——冒烟要证明的是「进得去、退得干净」，几何精度由 `Action*Tests` 逐条钉。
+- **判据不信任 CLI 退出码**：Unity CLI 对不存在的 `--filter` 不报错——实测（Task 2 的红证，filter 写成 `NoSuchCase`）退出码 0、XML 是 `testcasecount="0" result="Passed" total="0" failed="0"`，即「通过，但一个用例都没跑」。所以 `smoke` 每个阶段额外查三件事：XML 里没有 `result="Failed"` / `failed="[1-9]`、`total` 不是 0（空跑守卫）、marker 先删后跑且要求的行逐条命中；任一不满足即 `exit 1`，两条链路互不短路（第一条坏了第二条照跑）。`check.ps1` 反过来只管子进程退出码、不 grep 日志：上面三件事已经在被调脚本里判过，日志只留给人看。
+- **五步的真实数字**（收口前的最终跑，`apps/unity/Logs/check-lead-full-p5.log`，`summary: 5/5 ok`；bridge 用 `-Python` 指向本机解释器）：
+
+| 步骤 | 结果 | 数字 | 耗时 | 证据 |
+| --- | --- | --- | --- | --- |
+| `web` | PASS exit=0 | 190 tests / 21 files（`packages/protocol` 51 + `packages/motion` 9 + `apps/web` 130，三份 `Tests N passed` 都绿） | 11.2 s | `check-web.log` |
+| `bridge` | PASS exit=0 | 169 passed | 11.1 s | `check-bridge.log`（只有 169 个点，见下） |
+| `unity-edit` | PASS exit=0 | **44 total / 44 passed / 0 failed / 0 skipped** | 147.3 s | `TestResults/EditMode.xml` |
+| `unity-play` | PASS exit=0 | **164 total / 163 passed / 0 failed / 1 skipped**（跳过的是 `[Explicit] BridgeSmokeTests.UiSceneShot`） | 174.6 s | `TestResults/PlayMode.xml` |
+| `smoke` | PASS exit=0 | 桥接 1/1 + 动作 1/1，marker 五行齐全 | 184.6 s | `check-smoke.log` |
+
+- **四个 `-Skip*` 与 SKIP 语义**：`-SkipWeb` / `-SkipBridge` / `-SkipUnity` / `-SkipSmoke`（`-SkipUnity` 只跳两条 Unity 测试，smoke 有自己的开关），另有 `-Python <path>` 与 `-Timeout <秒>`。SKIP 既不算通过也不进分母，末尾多一行 `note: skipped …`；实测 `-SkipWeb -SkipUnity -SkipSmoke` 一轮是 `note: skipped web, unity-edit, unity-play, smoke (not counted as passes)` + `summary: 1/1 ok (4 skipped)`、EXIT=0（`apps/unity/Logs/check-lead-skip-combo.log`；`note` 在 `summary` 之前，末行恒为 `summary`）。
+- **耗时**：完整一轮约 **9 分钟**，Unity 三段占 500 s 上下。另一轮（`apps/unity/Logs/check-lead-full.log`，bridge 因没设 `MAS3D_PYTHON` 而 SKIP）是 `summary: 4/4 ok (1 skipped)`：web 11.5 s / unity-edit 147.4 s / unity-play 176.7 s / smoke 183.8 s。**跑前必须关掉编辑器**：Unity 单实例，撞锁只会让 Unity 段以非 0 退出码 FAIL，不会去读上一轮的旧 XML 假装全绿。
+- **两个已知摩擦**（都不影响判据）：
+  1. `apps/bridge/pytest.ini` 的 `addopts = -q` 叠加命令里显式写的 `-q` 成了双 quiet：`apps/unity/Logs/check-bridge.log` 里只有 169 个点和 `[100%]`，**没有「169 passed」摘要行**。想看摘要就临时去掉 `-q` 跑同一命令（`apps/unity/Logs/check-bridge-verbose.log`，实测 `169 passed in 9.97s`）；判红仍然只看退出码。
+  2. bridge 用哪个解释器由 `$env:MAS3D_PYTHON` 传入（`-Python` 优先，其次环境变量，最后 PATH 里的 `python`，每个候选先 `-c "import sys"` 实跑验证）；都没配好就打 `bridge SKIP (no python; set MAS3D_PYTHON)` 并进 `note:` 行，**不算失败**。所以读 `summary: 5/5 ok` 之前先看分母——有 SKIP 时会变成 `3/3`、`1/1` 甚至 `0/0`。
+
 ## 6. 四件动作的验收判据（可测，不靠肉眼）
 
 | 动作 | 判据 |
@@ -251,3 +279,19 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - **验收**：P5 的 smoke 全绿 + 第 6 节判据全部通过 + 双击出包可跑一轮完整对话与至少一件动作。
 - **回退**：apps/unity/ 是新增目录，任何时候删掉不影响 web 版；bridge 只加不改（/mas3d/api/asr 是纯增量端点），协议语义不变。
 - **安全边界**：房间与语音样本属本地自用资产，不进公开仓库；公开仓库只提交代码、配置与文档。
+
+## 11. web 版的归档（2026-11-04）
+
+- **归档点**：2026-11-04，P5 回归全绿（`tools/check.ps1` 一轮 `summary: 5/5 ok`，见 §5.21）之后同一天落地。自这一天起生效的边界：
+  - `apps/unity` 是唯一在维护的主线；`apps/web` 冻结，保留可运行，作为协议与观感的对照资产，不再是产品入口。
+  - web 端不接新功能、不修观感、不跟进新协议字段（§5.11 的纯增量可选字段由 Unity 侧按需消费，web 端可以忽略就忽略）。例外只有安全与阻断性 bug：修完仍须 `& pnpm.cmd -r test` 全绿。
+  - 落点：`apps/web/ARCHIVE.md` 写这条边界与 web 版的跑法；README 首段、目录表与快速开始同步改成 Unity 主线。
+  - 不动的部分：`apps/bridge`、`packages/protocol`、`packages/motion` 仍是两套客户端共享的语义出处，bridge 只加不改（§10 的回退承诺不变）。
+- **为什么保留测试**：`pnpm.cmd -r test` 的 190 条（`apps/web` 130 + `packages/protocol` 51 + `packages/motion` 9）不是历史包袱，是**第二条实现**的对照基线——bridge 加字段若把老客户端弄坏，`tools/check.ps1` 的第一步（web 门）先红，不必等 Unity 的 C# 镜像契约测试去发现；web 门还是强门禁，缺 `pnpm.cmd` 直接 FAIL，不会静默跳过。观感同理：`apps/web/e2e/smoke.mjs`（8 项）与 `room-angles.mjs` 的四机位是「她该长什么样」的既有参照——§1 里「画面已经让 YG 满意」指的就是这套画面，Unity 的 MToon 曝光配平（§5.20）要对齐的基准在它这里。
+- **要复活 web 版需要做什么**（按顺序；缺一条都只会得到「能起但不可信」的版本）：
+  1. **解归档**：删 `apps/web/ARCHIVE.md`，README 首段与目录表把主线改回 web；spec 追加一节复活记录，不改 §11 的历史结论（归档这件事不重写）。
+  2. **恢复主线性与门禁**：web 从「对照」升回「产品」，新用例与 Unity 同步增长，`ARCHIVE.md` 里那三条「不再做」作废；`tools/check.ps1` 的 web 步保持为必须绿。
+  3. **补齐新协议字段**：以 `packages/protocol/src/frames.ts` 的当前版本为准，把归档之后 bridge / Unity 新增的字段在 web 端消费或显式忽略（P3 的 ASR 是独立 HTTP 端点 `POST /mas3d/api/asr`，不进 WS 帧）；跑 `& pnpm.cmd --filter @mas3d/web test`、`node e2e/wire.mjs`、`node e2e/smoke.mjs`。
+  4. **重跑观感四机位**：`node e2e/room-angles.mjs --room /assets/room/mita-room.glb --dir <输出目录>`（在 `apps/web` 下跑）与 `node e2e/smoke.mjs` 的 8 项，和归档前的图逐张比；房间资产若在归档期变过，按 §5.20 的 `RoomLook.LightScale` 思路重新配平曝光。
+  5. **真链路一轮**：`& pnpm.cmd --filter @mas3d/web dev` 连真桥接 8790，走 `say → ack → thinking → reply → intent`，确认 HAST-SEC 与语音的降级契约（`bridge_down` → Tier 0/1、TTS 503 → 只显示字幕）没被归档期的改动破坏。
+  五步都过才把 web 版标回主线；任何一步不过，维持归档。

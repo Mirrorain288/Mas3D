@@ -1,24 +1,36 @@
 # Mas3D
 
-太空教室里的 Monika：浏览器 3D 场景 + 连续文字对话 + 语音与口型，对话走本机 AstrBot 插件，与 QQ 上的 Monika 共用同一套记忆与人设。
+太空教室里的 Monika：**Unity 桌面版是主线**（`apps/unity`）——走进房间、有身体、四件动作、语音与口型；对话仍走本机 AstrBot 插件，与 QQ 上的 Monika 共用同一套记忆与人设。原来的浏览器 3D 场景（`apps/web`）已归档保留、仍可运行，作为协议与观感的对照（见 `apps/web/ARCHIVE.md`）。
 
 ## 目录
 
 | 路径 | 作用 |
 | --- | --- |
-| `apps/web` | Vite + React + three 前端：教室场景、Monika 运行时、对话面板、动作仲裁、语音播放 |
+| `apps/unity` | Unity 6 桌面版（**主线**）：房间、玩家、语音输入、四件动作；场景由 `tools/unity.ps1 player` 重建，回归走 `tools/check.ps1` |
+| `apps/web` | Vite + React + three 前端（**已归档**，见 `apps/web/ARCHIVE.md`）：教室场景、Monika 运行时、对话面板、动作仲裁、语音播放 |
 | `apps/bridge` | AstrBot 插件（Python）：自定义平台事件、QQ 会话复用、本机 HTTP/WS 端点、HAST-SEC 与 GPT-SoVITS 适配 |
 | `packages/protocol` | 前后端帧与动作计划类型 + 运行时校验 |
 | `packages/motion` | 与 DOM 无关的表现层：cue 推导、手势曲线、动作仲裁 |
-| `tools` | 素材管线、VRM 面部位图提取、AstrBot 插件热链接脚本 |
+| `tools` | 素材管线、VRM 面部位图提取、AstrBot 插件热链接脚本、`unity.ps1` / `check.ps1` 回归入口 |
 | `openspec/changes/add-monika-space-classroom` | 本次变更的需求、设计决策、任务与验收记录 |
 
 ## 快速开始
 
+### Unity 版（主线）
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/unity.ps1 player   # 重建 Assets/Scenes/Main.unity（房间、玩家、相机、她）
+powershell -ExecutionPolicy Bypass -File tools/check.ps1          # 五步全回归：web → bridge → unity-edit → unity-play → smoke
+```
+
+两条命令都会起 Unity 批处理：跑前关掉编辑器（单实例，撞锁只会 FAIL）。`check.ps1` 一轮约 9 分钟，日常改动用 `tools/unity.ps1 smoke`（约 3 分钟），分工见 spec §5.21。
+
+### web 版（已归档，见 `apps/web/ARCHIVE.md`）
+
 ```powershell
 pnpm install
 pnpm assets              # 从 素材/ 派生可发布的贴图与模型到 apps/web/public/assets
-pnpm dev                 # 前端 http://localhost:5173
+& pnpm.cmd --filter @mas3d/web dev     # 前端 http://localhost:5173（根 package.json 没有 dev 脚本）
 pnpm mock:bridge --port 8787 --scenario happy   # 没有 AstrBot 时的剧本化桥接
 ```
 
@@ -50,6 +62,8 @@ pnpm assets:check        # 只校验字节数与 sha256，缺项时打印 missin
 - **GPT-SoVITS 音色权重**：本机自训练，不随仓库分发。
 
 **整体按非商用处理**：以上任一条款与商用发行冲突时以禁止商用为准。
+
+以下两节（换 VRM、换房间）是 **web 版**的操作说明：归档后仍有效，但不再跟进（见 `apps/web/ARCHIVE.md`）；Unity 侧换模型不走 `VITE_VRM_URL`。
 
 ## 换 VRM 模型
 

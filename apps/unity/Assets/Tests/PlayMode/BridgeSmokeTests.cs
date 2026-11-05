@@ -222,17 +222,7 @@ namespace Mas3D.Tests.PlayMode
             return false;
         }
 
-        static void WriteMarker(string line)
-        {
-            var path = MarkerPath();
-            Directory.CreateDirectory(Path.GetDirectoryName(path));
-            File.AppendAllText(path, line + Environment.NewLine);
-            Debug.Log(line);
-        }
-
-        static string MarkerPath()
-        {
-            return Path.GetFullPath(Path.Combine(Application.dataPath, "..", MarkerRelative));
-        }
+        // marker 的路径与行格式归 SmokeMarker 一处：动作冒烟写另一种文件名、同一种行，复制一份会被评审当缺陷。
+        static void WriteMarker(string line) => SmokeMarker.Write(MarkerRelative, line);
     }
 }
