@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 namespace Mas3D
@@ -14,12 +15,41 @@ namespace Mas3D
         public float RunSpeed = 3.4f;
         public float Acceleration = 18f;
         public float Gravity = -20f;
-        public float TurnRate = 720f;
+        /// <summary>旧默认值 720 °/s。Main.unity 里序列化的还是它，Awake 时迁移成 <see cref="DefaultTurnRate"/>。</summary>
+        const float LegacyTurnRate = 720f;
+
+        /// <summary>
+        /// 每秒钟最多的转身角度。720 时一个 60 fps 的帧能甩 12°，镜头跟着根节点一起晃；
+        /// 270 是「跟手」与「稳」之间的折中，也是本计划定的值。
+        /// </summary>
+        public const float DefaultTurnRate = 270f;
+
+        public float TurnRate = DefaultTurnRate;
         public float EyeHeight = 1.62f;
         public float CapsuleRadius = 0.30f;
         public float CapsuleHeight = 1.70f;
         public bool KeyboardInput = true;
+
+        /// <summary>
+        /// 原始输入轴的注入口（测试用）：为空时读 Unity 的 Horizontal/Vertical。
+        /// 批处理没有真实输入设备，「方向来自意图 yaw」这条判据只能靠注入的原始轴来钉。
+        /// </summary>
+        public Func<Vector2> AxisInput;
+
+        PlayerCameraRig _rig;
         public string SprintButton = "Left Shift";
+
+        /// <summary>
+        /// 输入框所在的面板。不为空时，焦点落在输入框里就停掉键盘走路：打字时 WASD 是文字，不是移动。
+        /// RoomBootstrap 在 Boot 里接上；测试里单独赋值即可。
+        /// </summary>
+        public Mas3D.UI.DialoguePanel Panel;
+
+        /// <summary>
+        /// 键盘门的另一半（Esc 锁死）。可为空：没接 Modes 时只看 Panel，
+        /// 所以旧测试只给 Panel 也能跑。
+        /// </summary>
+        public InputModes Modes;
 
         CharacterController _controller;
         Vector3 _planar;
@@ -30,7 +60,24 @@ namespace Mas3D
         public Vector3 PlanarVelocity => _planar;
         public bool Grounded => _controller != null && _controller.isGrounded;
 
-        void Awake() => EnsureReady();
+        /// <summary>
+        /// 键盘这一帧到底算不算可用：KeyboardInput 是总闸（演出、接触用例靠它整台冻结），
+        /// 焦点在输入框里时停。没有第三种「锁」—— 上一版 Esc 之后会锁住 WASD，而界面上没有任何
+        /// 提示，实机表现就是「走一会儿突然不受控」（m17495 第 4 条）。
+        /// 它只决定喂给 Tick 的行走意图 —— 门关着就把 wish 换成 0，Tick 照跑（重力与贴地不能一起停），
+        /// 所以它不是 Update 的唯一判据：整台早退在 KeyboardInput 上。
+        /// </summary>
+        public bool WantsKeyboard =>
+            KeyboardInput &&
+            (Panel == null || !Panel.IsInputFocused);
+
+        void Awake()
+        {
+            // Main.unity 里存的还是旧默认 720：只改 C# 默认值对已经在场景里的玩家无效，而那个场景文件
+            // 正被渲染侧大改，不去碰它。恰好等于旧默认的值按旧默认迁移，手工调过的其它值原样保留。
+            if (Mathf.Approximately(TurnRate, LegacyTurnRate)) TurnRate = DefaultTurnRate;
+            EnsureReady();
+        }
 
         /// <summary>
         /// Configures the controller and creates the head; safe to call again, and required by
@@ -108,17 +155,27 @@ namespace Mas3D
 
         void Update()
         {
+            // 总闸关掉（测试、演出）时整台 motor 停：那是刻意的冻结，不是“打字门”，
+            // ActionKiss/ActionHands 这些接触用例靠它把玩家钉在原地。
             if (!KeyboardInput) return;
-            Tick(Time.deltaTime, ReadWish());
+
+            // 打字门只关行走意图，不关物理：焦点在输入框里、或 Esc 锁死时把 wish 换成 0，
+            // 但 Tick 照跑 —— 否则重力和贴地也会一起停（空中按 E 会悬停）。
+            // Tick 里是 MoveTowards(_planar, 0, Acceleration * dt)：门清的是意图，速度按加速度收敛到 0，不是瞬停。
+            Tick(Time.deltaTime, WantsKeyboard ? ReadWish() : Vector2.zero);
         }
 
-        /// <summary>Keyboard wish direction, expressed in the ground plane relative to the view.</summary>
+        /// <summary>Keyboard wish direction, expressed in the ground plane relative to the intent yaw.</summary>
         public Vector2 ReadWish()
         {
-            var raw = new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
+            var raw = AxisInput != null
+                ? AxisInput()
+                : new Vector2(Input.GetAxisRaw("Horizontal"), Input.GetAxisRaw("Vertical"));
             if (raw.sqrMagnitude < 0.0001f) return Vector2.zero;
-            var view = Camera.main != null ? Camera.main.transform : null;
-            var yaw = view != null ? view.eulerAngles.y : 0f;
+            // 用意图 yaw，不用渲染相机：Cinemachine 的朝向带阻尼，滞后一帧的 yaw 被喂回移动方向后，
+            // 机器就在自己追自己，画面会持续左右摆。没有 rig（老测试）时退回玩家自己的朝向。
+            if (_rig == null) _rig = GetComponent<PlayerCameraRig>();
+            var yaw = _rig != null ? _rig.IntentYaw : transform.eulerAngles.y;
             var rotated = Quaternion.Euler(0f, yaw, 0f) * new Vector3(raw.x, 0f, raw.y);
             return new Vector2(rotated.x, rotated.z);
         }
@@ -148,6 +205,12 @@ namespace Mas3D
             {
                 var look = Quaternion.LookRotation(wish, Vector3.up);
                 transform.rotation = Quaternion.RotateTowards(transform.rotation, look, TurnRate * dt);
+
+                // 转完身之后补一次相机姿态：PlayerCameraRig.Update 很可能比这里先跑（同物体上组件顺序），
+                // 它写完 Pivot 再被这一转带着偏 TurnRate*dt，而 Cinemachine 是在 LateUpdate 取景的。
+                // Apply 幂等，没有 rig 时什么都不做。
+                if (_rig == null) _rig = GetComponent<PlayerCameraRig>();
+                if (_rig != null) _rig.Apply();
             }
         }
 

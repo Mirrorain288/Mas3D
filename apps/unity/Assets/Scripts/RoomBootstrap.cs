@@ -50,6 +50,12 @@ namespace Mas3D
         /// </summary>
         public AvatarWalker Walker;
 
+        /// <summary>
+        /// 键盘模式（E 进输入框、Esc 退出并锁走路键盘）。和 Actions 一样由 Boot 建、Boot 接线：
+        /// 场景里不需要预先摆一个组件，而每个调用 Boot 的入口（CliPlayer 也算）都自动拿到。
+        /// </summary>
+        public InputModes Modes;
+
         // The imported floor sits at y = 0.04; spawning exactly on it leaves the capsule
         // penetrating, and a penetrating CharacterController never reports itself grounded.
         public const float SpawnLift = 0.10f;
@@ -167,6 +173,19 @@ namespace Mas3D
                 speaker.Settings = settings != null && settings.Settings != null ? settings.Settings : new BridgeSettings();
                 Dialogue.Speaker = speaker;
             }
+
+            // 键盘模式挂在 Boot 的子物体上，理由和 Actions 一样：运行时 new 出来的对象必须跟着场景走，
+            // 否则 Main 被卸载后它还在 Update 里摸已经销毁的面板（MissingReferenceException）。
+            // 面板优先取对话控制器手上那块；场景里没有对话时退回全局找 —— Bind(null) 是合法的，
+            // 那种场景只剩 E/Esc 的空转，走路照常。
+            var dialoguePanel = Dialogue != null && Dialogue.Panel != null ? Dialogue.Panel : FindAnyObjectByType<DialoguePanel>();
+            if (Modes == null)
+            {
+                var modesGo = new GameObject("Input");
+                modesGo.transform.SetParent(transform, false);
+                Modes = modesGo.AddComponent<InputModes>();
+            }
+            Modes.Bind(Player, dialoguePanel);   // Bind 同时把 Panel/Modes 交给玩家：焦点在框里、Esc 锁死时不走路
 
             Debug.Log($"[room] colliders={ColliderCount} spawn={(anchor != null ? anchor.id : "none")} at={(anchor != null ? anchor.x.ToString("F2") + "," + anchor.z.ToString("F2") : "-")}");
 

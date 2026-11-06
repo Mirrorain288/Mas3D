@@ -28,11 +28,13 @@ namespace Mas3D
         public const string BodyName = "Me";
 
         /// <summary>
-        /// The boom length under which the head gets out of the camera. The rig's own minimum is
-        /// 0.9 m, so at 1.2 m the camera sits inside the skull and a kept head fills the screen with
-        /// the back of a face; everything from 1.2 m out reads as third person and keeps the head.
+        /// The boom length under which the head gets out of the camera. The rig treats 1.2 m and closer
+        /// as first person (PlayerCameraRig.FirstPersonAtOrBelow, camera 5 cm behind the eyes), and sits
+        /// inside the skull a whole step before that — so the threshold has to be *slacker* than the
+        /// rig's line, otherwise the exact 1.2 m frame keeps the back of the head across the screen.
+        /// 1.25 leaves a 5 cm margin; the pair is pinned by CameraStabilityTests.
         /// </summary>
-        public const float NearDistance = 1.2f;
+        public const float NearDistance = 1.25f;
 
         /// <summary>
         /// Standing height the model is scaled to. It is the capsule height (PlayerMotor.CapsuleHeight)

@@ -39,6 +39,12 @@ namespace Mas3D.UI
         /// <summary>玩家按了回车/发送，且文字不是空白。参数是输入框里的原文。</summary>
         public event Action<string> Submitted;
 
+        /// <summary>
+        /// 焦点进出输入框（true = 刚聚焦）。<see cref="InputModes"/> 靠它解 Esc 锁：
+        /// 锁只认这一个信号，别的路径（点外面、面板失活）都不该悄悄把键盘放开。
+        /// </summary>
+        public event Action<bool> FocusChanged;
+
         struct Entry
         {
             public string Text;
@@ -61,8 +67,14 @@ namespace Mas3D.UI
         string _subtitleText = string.Empty;
         bool _thinkingShown;
         bool _interactable = true;
+        // IME 组合态：真输入法读 UnityEngine.Input.compositionString（旧 Input Manager 的公开 API，
+        // 组合期非空、上屏后清空）；测试/外部另有 ApplyComposition 接缝推值。
+        // 不走 UI Toolkit 的 IMECompositionEvent（6000.6.7f1 里不是公开类型，引用直接编译不过），
+        // 也不走反射读 textEdition.isComposing（实测该属性为 null，整段是死代码）。
+        bool _composingManual;
         static Font _cjkFont;
         static bool _fontResolved;
+        static bool _warnedMissingPanel;
 
         /// <summary>输入框里的文字。setter 按 ClientFrame.MaxInputChars（300）截断，并同步计数。</summary>
         public string InputText
@@ -74,15 +86,82 @@ namespace Mas3D.UI
             }
             set
             {
+                WriteInput(value);
+            }
+        }
+
+        /// <summary>
+        /// 输入框文字的唯一写入口：值、计数、光标一起搬（光标永远落在新文本末尾）。
+        /// 为什么非要收成一个口：先前各处各自写 `_input.value`，写完不搬光标，下一次真按键就插在旧光标处 ——
+        /// 「你以站起来吗可」那种末几字错位就是这么来的。别在别处直接写 value，一律走这里。
+        /// </summary>
+        void WriteInput(string value)
+        {
+            EnsureBound();
+            if (_input == null) return;
+            var text = value ?? string.Empty;
+            if (text.Length > ClientFrame.MaxInputChars) text = text.Substring(0, ClientFrame.MaxInputChars);
+            if (_input.value != text) _input.SetValueWithoutNotify(text);   // 不触发 ChangeEvent：计数在下面显式刷
+            RefreshCounter();
+            RefreshPlaceholder();
+            MoveCaretToEnd();
+        }
+
+        /// <summary>
+        /// 把一段文字接在现有内容末尾（语音回执、未来的快捷输入都走这里）。
+        /// 追加语义固定按“末尾”算：哪怕玩家把光标挪到中间，语音回执也不该插进句子中间去。
+        /// </summary>
+        public void AppendToInput(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+            EnsureBound();
+            if (_input == null) return;
+            WriteInput((_input.value ?? string.Empty) + text);
+        }
+
+        /// <summary>光标下标（0..长度）。测试用它钉“写完光标在末尾”，也给将来插入文字用。</summary>
+        public int CursorIndex
+        {
+            get
+            {
+                EnsureBound();
+                if (_input == null) return 0;
+                return _input.cursorIndex;
+            }
+            set
+            {
                 EnsureBound();
                 if (_input == null) return;
-                var text = value ?? string.Empty;
-                if (text.Length > ClientFrame.MaxInputChars) text = text.Substring(0, ClientFrame.MaxInputChars);
-                if (_input.value == text) return;
-                _input.SetValueWithoutNotify(text);   // 不触发 ChangeEvent：计数在下面显式刷
-                RefreshCounter();
-                RefreshPlaceholder();
+                SetCaret(value);
             }
+        }
+
+        /// <summary>
+        /// 输入框本身是否可编辑（跟 Interactable 不是一回事：发送期只是不许再发，字仍然能打）。
+        /// 读 enabledInHierarchy 而不是 enabledSelf —— 父级被灰掉时这里也必须如实说“不能打字”。
+        /// </summary>
+        public bool InputFieldEnabled
+        {
+            get
+            {
+                EnsureBound();
+                return _input != null && _input.enabledInHierarchy;
+            }
+        }
+
+        /// <summary>IME 是否正在组词（候选还没上屏）。接缝与操作系统任一路说是，就是。</summary>
+        public bool IsComposing
+        {
+            get { return _composingManual || !string.IsNullOrEmpty(Input.compositionString); }
+        }
+
+        /// <summary>
+        /// 组合态接缝：非空 = 正在组词，空串 = 组词结束（候选已上屏）。
+        /// 只改这一个布尔，不碰文本 —— 上屏本身由 UI Toolkit / 输入法完成，这里多写一次只会写重。
+        /// </summary>
+        public void ApplyComposition(string composition)
+        {
+            _composingManual = !string.IsNullOrEmpty(composition);
         }
 
         /// <summary>
@@ -101,6 +180,52 @@ namespace Mas3D.UI
                 if (focused == null) return false;
                 return focused == _input || _input.Contains(focused);
             }
+        }
+
+        /// <summary>
+        /// 把焦点搬进输入框（玩家按 E，或 InputModes 判定该打字了）。
+        /// 这里只做“聚焦”这一件事：光标落点归 Task 2 的唯一写入口，别在这里再写一份。
+        /// </summary>
+        public void FocusInput()
+        {
+            EnsureBound();
+            if (_input == null) return;
+            _input.Focus();
+            var handler = FocusChanged;
+            if (handler != null) handler(true);
+        }
+
+        /// <summary>把焦点从输入框拿走（Esc、点面板外面、面板收起来）。树没挂上时静默返回。</summary>
+        public void BlurInput()
+        {
+            EnsureBound();
+            if (_input == null) return;
+            _input.Blur();
+            var handler = FocusChanged;
+            if (handler != null) handler(false);
+        }
+
+        /// <summary>
+        /// 屏幕坐标是不是落在面板矩形里（“点面板外面就失焦”用）。
+        /// 拿不到树或容器时返回 true —— 当成“在里面”，免得一次误判把玩家正在打的字清掉。
+        /// </summary>
+        public bool ContainsScreenPoint(Vector2 screenPoint)
+        {
+            EnsureBound();
+            var root = Document != null ? Document.rootVisualElement : null;
+            var container = root != null ? root.Q("panel") : null;
+            if (container == null || container.panel == null)
+            {
+                // 静默返回 true 会让“点面板外”永远判不出来；提示一次，但不改语义（宁可不清空输入）。
+                if (!_warnedMissingPanel)
+                {
+                    _warnedMissingPanel = true;
+                    Debug.LogWarning("[DialoguePanel] 拿不到 \"panel\" 容器，点面板外暂时都按“面板内”处理（只提示一次）。");
+                }
+                return true;
+            }
+            var panelPoint = RuntimePanelUtils.ScreenToPanel(container.panel, screenPoint);
+            return container.worldBound.Contains(panelPoint);
         }
 
         /// <summary>输入框和发送按钮能不能用。等回复时为 false（重复提交防护的一半，另一半在控制器）。</summary>
@@ -380,12 +505,21 @@ namespace Mas3D.UI
         // ---- 输入 -------------------------------------------------------------
 
         /// <summary>
-        /// Enter 发送、Shift+Enter 换行（IME 确认候选词也走这里）。
+        /// Enter 发送、Shift+Enter 换行。
         /// 用 trickle 阶段先接住：挡住 TextField 内部把 Enter 当换行插进文本。
         /// 不用 TextField.isDelayed —— 那样要等失焦才回调，与“Enter 即发”冲突。
+        /// IME 组词中一律放行：那一下 Enter 是“确认候选”，既不是发送也不是换行。
         /// </summary>
         void OnInputKeyDown(KeyDownEvent evt)
         {
+            if (IsComposing)
+            {
+                // 组词中的 Enter 是“确认候选”，必须原样交给输入法/TextField 去上屏。
+                // 这里**不要** StopPropagation：在 trickle 阶段掐断事件会把这一次上屏吞掉，
+                // 候选字就会跑到句子末尾或被丢掉 —— 实机「你以站起来吗可」那种错位就是这么来的。
+                // 多出来的那个换行由发送时的 TrimEnd 收拾，代价远小于丢字。
+                return;
+            }
             if (evt.keyCode != KeyCode.Return && evt.keyCode != KeyCode.KeypadEnter) return;
             if (evt.shiftKey) return;
             evt.StopPropagation();
@@ -404,6 +538,7 @@ namespace Mas3D.UI
             var handler = Submitted;
             if (handler == null) return;
             InputText = string.Empty;
+            ApplyComposition(string.Empty);   // 发出去之后组合态必须清：真机一旦漏了空串，Enter 会被永久堵死
             handler(text);
         }
 
@@ -412,7 +547,10 @@ namespace Mas3D.UI
             var text = evt.newValue ?? string.Empty;
             if (_input != null && text.Length > ClientFrame.MaxInputChars)
             {
-                _input.SetValueWithoutNotify(text.Substring(0, ClientFrame.MaxInputChars));
+                // 超长要截断，但不许在这里再写一次 _input.value：那会绕开 WriteInput，
+                // 光标留在旧位置，下一键就插到句子中间去（“唯一写入口”是这条面板的硬规矩）。
+                WriteInput(text);
+                return;
             }
             RefreshCounter();
             RefreshPlaceholder();
@@ -434,8 +572,28 @@ namespace Mas3D.UI
 
         void ApplyInteractable()
         {
-            if (_input != null && _input.enabledSelf != _interactable) _input.SetEnabled(_interactable);
+            // 输入框永远不禁用：发送期把 TextField SetEnabled(false) 会把焦点、光标和正在打的字一起丢掉，
+            // 回执回来再 SetEnabled(true) 也不会把光标还给你 —— 这就是“打字掉字/错位”的另一半病根。
+            // 能不能发由 SendFromInput 里的 _interactable 把关；按钮灰掉只是给玩家看的提示。
+            // 这里也不去“顺手复活”输入框：Interactable 只管发送按钮，输入框的启用状态归它自己的调用方
+            //（将来任何有意禁用输入框的状态不该被这里顶掉）。
             if (_send != null && _send.enabledSelf != _interactable) _send.SetEnabled(_interactable);
+        }
+
+        void MoveCaretToEnd()
+        {
+            if (_input == null) return;
+            SetCaret(_input.value != null ? _input.value.Length : 0);
+        }
+
+        void SetCaret(int index)
+        {
+            if (_input == null) return;
+            var length = _input.value != null ? _input.value.Length : 0;
+            if (index < 0) index = 0;
+            if (index > length) index = length;
+            // 同时把选区收成一点：只写 cursorIndex 会留下旧选区，下一次键入会把整段选中内容替换掉。
+            _input.SelectRange(index, index);
         }
     }
 }

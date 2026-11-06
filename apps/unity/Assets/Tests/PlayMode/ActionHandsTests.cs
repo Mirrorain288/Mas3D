@@ -93,12 +93,16 @@ namespace Mas3D.Tests
             var chest0 = chest.localRotation;
             var samples = new List<Vector3>();
             var swing = 0f;   // 取整段最大偏移：呼吸周期 3.0 s，最后恰好回到同相位，末帧采样会读出 0°
-            for (var i = 0; i < 180; i++)   // 3 s
+            // 按**模拟时间**跑满一个呼吸周期，不按帧数：AvatarIdle 的时钟是 Time.deltaTime，
+            // 批处理里帧可以跑到上万 fps，数 180 帧可能只推进几十毫秒，摆动幅度自然读不满（曾经因此假红）。
+            var elapsed = 0f;
+            while (elapsed < 3f)
             {
                 _director.Tick(1f / 60f);
                 yield return null;
+                elapsed += Time.deltaTime;
                 swing = Mathf.Max(swing, Quaternion.Angle(chest0, chest.localRotation));
-                if (i >= 120) samples.Add(_actor.Rig.Bone(HumanBodyBones.LeftHand).position);
+                if (elapsed > 2f) samples.Add(_actor.Rig.Bone(HumanBodyBones.LeftHand).position);
             }
             Assert.Greater(swing, 0.2f, "呼吸必须真的在跑，否则这条用例测的是静物");
             var mean = Vector3.zero;

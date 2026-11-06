@@ -4,7 +4,9 @@
     "references": [
         "Unity.Cinemachine",
         "VRM10",
-        "UniHumanoid"
+        "UniHumanoid",
+        "Unity.RenderPipelines.Universal.Runtime",
+        "Unity.RenderPipelines.Core.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

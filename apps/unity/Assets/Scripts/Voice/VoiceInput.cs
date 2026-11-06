@@ -284,7 +284,9 @@ namespace Mas3D.Voice
                     // 玩家没动过、或自己把框清空了（空框追加只会多一个前导空格）：覆盖；
                     // 框里还有别的字（真在打字）：追加，绝不吞掉刚打的字。
                     var untouched = current == draft || string.IsNullOrWhiteSpace(current);
-                    Panel.InputText = untouched ? result.Text : current + " " + result.Text;
+                    // 覆盖也走唯一写入口（值 + 光标一起搬）；追加交给 AppendToInput，别在这里自己拼字符串写 value。
+                    if (untouched) Panel.InputText = result.Text;
+                    else Panel.AppendToInput(" " + result.Text);
                     SetStatus(ReadyCopy);
                 }
                 return;
