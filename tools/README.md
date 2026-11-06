@@ -121,6 +121,29 @@ powershell -ExecutionPolicy Bypass -File tools/check.ps1
 - `pnpm` 必须走 `pnpm.cmd`（`pnpm.ps1` 会被执行策略拦，表现为命令静默、退出码为空），脚本里由 `cmd /c` 转一层，因为 `Start-Process` 没法直接重定向 `.cmd` 的输出。
 - `check-*.log` 是 `Start-Process -RedirectStandardOutput` 直接接到子进程管道后写出的**原始字节**（本机按控制台代码页，中文可能显示成乱码）；PowerShell 自己的 `*>` 才写 UTF-16、才需要 `-Encoding Unicode`。两种不要混：判定从不读日志，日志只供人看。
 
+## 观感验收：一条命令出数与比对
+
+```
+powershell -ExecutionPolicy Bypass -File tools\look-shoot.ps1
+```
+
+它按顺序做三件事，产出落在 `.superpowers/look/<日期>/`：
+
+1. `unity.ps1 player` 重建可玩场景（材质、灯、描边的数值在这一步写进 `Main.unity`）；
+2. `unity.ps1 capture -noShadows 1` 出五张交付图（`play-01..04`、`avatar-seated`）加两张关阴影的底片（`no-shadow-01`、`no-shadow-03`）；
+3. 跑 `look-compare.mjs`（脸颊 B/R、脸峰值、房间对比度、描边像素、脚下极差）与 `shadow-diff.mjs`（有/无阴影的像素差），退出码 = 失败项数。
+
+单独跑其中一件：
+
+```
+node tools/look-compare.mjs --mine apps/unity/Shots --ref docs/superpowers/specs/assets/2026-11-06-reference.png --report .superpowers/look/2026-11-06/metrics.json
+node tools/shadow-diff.mjs apps/unity/Shots/play-01.png apps/unity/Shots/no-shadow-01.png
+```
+
+三条口径是量出来定的，改判据前先读 `docs/superpowers/plans/2026-11-06-rendering-alignment.md` 的「Task 6 实测偏差」：脸峰值取 99.5 分位（不是 max）、描边取暗带长度的 75 分位（不是 max）、阴影差的分母取下半幅（影子只能落在照得到直射光的地方）。脚下光斑不做像素门，改由 `RoomLightTests` 从灯光配置上钉。
+
+`look-compare.mjs` 依赖 `sharp`（仓库根 `node_modules` 已有）。`player` / `capture` 接受的额外开关会原样转发给编辑器，例如 `capture -noShadows 1`。
+
 ## 为什么天空盒不是 EXR
 
 原始文件 `NightSkyHDRI008_8K_HDR.exr` 是 **112,336,889 字节** 的 8K OpenEXR。它能被 three 的 `EXRLoader` 读取，但：

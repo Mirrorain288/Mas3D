@@ -107,14 +107,15 @@ switch ($Action) {
     # room anchors solved from measured geometry (see spec 5.17)
     'anchors'   { Invoke-Batch 'Mas3D.Editor.CliAnchors.Solve' }
     # playable scene: dressed room + CharacterController player + Cinemachine camera
-    'player'    { Invoke-Batch 'Mas3D.Editor.CliPlayer.BuildScene' }
+    # extra args after --rest are forwarded (e.g. -noShadows 1)
+    'player'    { Invoke-Batch 'Mas3D.Editor.CliPlayer.BuildScene' -Extra $Rest }
     # Avatar sitting pose: front and side stills under Shots plus the hip/knee numbers (GPU required)
     'avatarpose' { Invoke-Batch 'Mas3D.Editor.CliAvatarPose.Probe' -Gpu }
     # Four third-person stills of the playable scene, then one PlayMode still that includes the
     # dialogue panel (GPU required, no -nographics). The batch path renders with camera.Render(),
     # which cannot see UI Toolkit overlays, so the panel shot runs through the test runner.
     'capture'   {
-        Invoke-Batch 'Mas3D.Editor.CliPlayer.Capture' -Gpu
+        Invoke-Batch 'Mas3D.Editor.CliPlayer.Capture' -Gpu -Extra $Rest
         $results = Join-Path $project 'TestResults/UiScene.xml'
         $marker = Join-Path $project 'Logs/smoke-marker.txt'
         New-Item -ItemType Directory -Force -Path (Split-Path -Parent $results) | Out-Null

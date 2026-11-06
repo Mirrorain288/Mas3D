@@ -297,6 +297,44 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - **评审轮的变异红（这次 XML 都留了）**：① 去掉 `CopyClip`（`onOk(downloaded)`）→ PlayMode **203/201/1/1**，唯一失败 `TtsTransportTests.TheClipHandedUpIsAnOwnedCopyThatOutlivesTheRequest`（`Logs/p7-review-mut-clip.xml`）；② 去掉 `Stop()` 里的 `_hasSpoken = false` → PlayMode **203/201/2/1**，失败 `AStoppedLineCanBeSaidAgainInTheSameTurn`（等了 10 s 没再合成）+ 同轮 `VoiceSceneTests` 因失败用例留下的面板未清而连带红（`Logs/p7-review-mut-replay.xml`）；③ 硬切不避代理对 + 去掉令牌形似开关的守卫 + 直接 `onOk(downloaded)` → EditMode **75/73/2/0**，失败 `ALongSentenceIsNeverCutThroughTheMiddleOfOneCharacter`、`ATokenThatLooksLikeAFlagIsIgnoredInsteadOfBeingSent`（`Logs/p7-review-mut-edit.xml`）。还原后 EditMode 75/75/0/0、PlayMode 203/202/0/1。
 - **六门终跑**（评审修完之后重跑，`summary: 6/6 ok`，exit 0）：web 12.3 s / bridge 17.2 s / unity-edit 25.4 s / unity-play 58.7 s / smoke 61.8 s / player 6.2 s。`player` 门跑的是这一轮重编的 IL2CPP 包（`build/GameAssembly.dll` 37,611,520 B @ 12:34:02、`global-metadata.dat` 10,902,128 B @ 12:33:41；`Mas3D.exe` launcher 仍是 11-05 那份 667,136 B），即 `PlayerBody` 在打包版里打一条 `Debug.LogError` 后降级、没有把门弄红。同轮 `TestResults/EditMode.xml` = **75/75/0/0** @ 12:36:22、`TestResults/PlayMode.xml` = **203/202/0/1** @ 12:37:20（跳过 `BridgeSmokeTests.UiSceneShot`）。Task 2 的两个变异 XML 仍在 `Logs/p7-task2-fix2b-mut-i1.xml` / `-i2.xml`，评审轮三个在 `Logs/p7-review-mut-*.xml` 供复核。
 
+### 5.24 观感与操作对齐（2026-11-06 实测）
+
+用户 m16063 报了六条实机问题（画面发灰、打字常开、走位时镜头晃、脚下有光、滚轮缩放不对、输入框字符错序），并给出白底立绘作为判据基准（`docs/superpowers/specs/assets/2026-11-06-reference.png`，542×1030）。设计见 `docs/superpowers/specs/2026-11-06-art-and-controls-alignment-design.md`，实施计划见 `docs/superpowers/plans/2026-11-06-{rendering,controls}-alignment.md`。
+
+**管线（发灰的根因，不是调色能救的）**
+- `ProjectSettings.asset:49` 是 **Gamma**，改成 Linear（`m_ActiveColorSpace: 1`）。Gamma 下所有 PBR 值与贴图都在错误的色彩空间里运算，之前房间靠 `RoomSurface.shader` 手写 ACES 自救，而角色（MToon）完全没过 tonemap——两边永远不会一致。
+- 调色统一到 **Volume**：`RoomLook.Apply()` 首次调用时用代码建全局 Volume（`Mas3D-Look`，`isGlobal`、priority 1000），ACES + ColorAdjustments(postExposure **−0.15** / contrast 18 / saturation 15 / colorFilter **(0.98,1.00,1.02)**) + WhiteBalance(−16/+4) + Bloom(0.12@1.1) + Vignette(0.15)。**手写 ACES 从 shader 里删干净**（`RoomSurface.shader`、`RoomMirror.shader`），否则同一帧里会有两次 tone mapping。
+- 相机开后处理：`Main.unity` 的 `m_RenderPostProcessing: 1`、`CliPlayer` 里 `UniversalAdditionalCameraData.renderPostProcessing = true`。出图日志 `[play] volume Mas3D-Look … colourAdjustments=True post=-0.32` 就是这条链路的证据。
+- **调色入口只能有一处数值**：`RoomLook.PostExposure` 与 `RoomDress.Tuning.postExposure` 必须同源（后者默认值直接引用前者）。曾只改前者，编辑器出图走的是后者（`CliPlayer.BuildScene` → `RoomDress.Apply`），于是曝光改了没生效。
+- **最贵的一处坑：`postProcessData` 是 null**。`Assets/Settings/Mas3D-URP-Renderer.asset` 从 `CreateInstance<UniversalRendererData>()` 生成起就写着 `postProcessData: {fileID: 0}`，URP 遇到 null **静默跳过整条后处理**：把 `RoomLook.PostExposure` 从 −0.45 改到 −3.0，出图逐像素不变，而 Volume、相机开关、VolumeManager 栈全是对的。写回 `com.unity.render-pipelines.universal` 包内 `PostProcessData.asset`（guid `41439944d30ece34e96484bdb6645b55`）之后 ACES 才第一次真正生效，整幅压暗一档、脸的灰绿脏感消失。回归用例 `RoomLookTests.TheRendererIsWiredToPostProcessData`。**在此之前的所有观感扫参都作废。**
+- **SSAO 关掉了**：实测关 SSAO 前后，房间床脚交界的 p05/p25/median 三档完全一致（44~45 / 81 / 135~136），而脸部 p05 从 10 抬到 26、脏感明显减轻；**SSAO 的 feature 已从 `Mas3D-URP-Renderer.asset` 里删除**（不是关掉）：只写 `m_Active: 0` 时 feature 仍在列表里，玩家构建里 URP 照样构造它，而它的 shader 因「未启用」被剥离 → `ScreenSpaceAmbientOcclusion.TryPrepareResources()` 抛 `NullReferenceException`，`CreatePipeline()` 每帧失败，exe 黑屏像打不开（2026-11-06 23:0x `build/play.log` 实测；编辑器内与六门都抓不到，player 门只跑 `-selftest`）。`OutlineTests` 现在断「SSAO 必须不存在」。
+- `RoomLook.LightScale` 从 0.5 改回 **1.0**：那是为了补偿「房间有 ACES、角色没有」的 2.3 倍差，管线归位后它是新的偏差源。
+
+**灯**
+- moon 平行光从冷蓝 `0xbcd6ff` 改暖白 `0xffe2d2`、强度 1.1；lamp 台灯改成 **Soft** 阴影（原来 None）；**删掉 y=0.32 的 floor-bounce 点光**（用户看到的"脚下有奇怪光源"就是它和两盏无阴影吊顶光在每物体 4 盏附加光上限里轮换的结果）。
+- 吊顶光从 2 盏 → **4 盏**（`ceiling-glow-1..4`，x 偏移 ±0.33/±0.11 × 房间宽、y = 檐口 −0.55、range 10、不投影、强度 = glow×0.5）。降到 eave−0.55 是因为贴到 −0.35 时 1/d² 会在吊顶上烧出四道亮条。
+- URP 资产四个开关一起开：`m_AdditionalLightShadowsSupported`、`m_SoftShadowsSupported`、`m_PrefilteringModeAdditionalLightShadows`、`m_PrefilterSoftShadows`——只翻前两个，变体会被 prefiltering 剥掉，界面正常、出图零影子。
+
+**角色材质与描边**
+- **MToon 明暗带**（`Scripts/Avatar/AvatarShading.cs`）：VRM 导入的 `_ShadingToonyFactor` = 1.0，`mtoon_linearstep(-1+1, 1-1, x)` 上下界重合恒返回 1；加上 `_MTOON_PARAMETERMAP` 开着会采空 shift 贴图再 +1。结果整张脸永远只有 litColor。改成 shift **−0.15** / toony **0.9** 并 `DisableKeyword("_MTOON_PARAMETERMAP")`；**写的是场景副本**（`Object.Instantiate(material)` 后写回 `renderer.sharedMaterials`），不改 VRM 资产，否则重新导入即丢。
+- **描边**：VRM10 包自带 `MToonOutlineRenderFeature`（Unity 6000+ 走 URP 内置 `RenderObjectsPass`，shaderTags `MToonOutline`，Render Graph 下能画，不需要自己写 `RecordRenderGraph`），已追加进 `Apps/unity/Assets/Settings/Mas3D-URP-Renderer.asset` 并保留原有 SSAO。宽度按像素反算：1080p / fov 42 / 2.5 m 下 1 m ≈ 563 px，故身体 `_OutlineWidth = 0.0040`（≈2.25 px）、布料/鞋袜 0.0032，脸/眼/眉/嘴/睫毛/牙齿/舌/耳 恒 0（`AvatarOutlines.WidthFor`）。同时必须置 `_OutlineWidthMode = 1`，否则 MToon 的描边 pass 直接跳过。
+- **阴影真的落地**：`RoomSurface.shader` 加 `_MAIN_LIGHT_SHADOWS*/_ADDITIONAL_LIGHT_SHADOWS/_SHADOWS_SOFT*` 五组关键字，frag 里 `TransformWorldToShadowCoord` + `GetMainLight(shadowCoord)` 并乘 `shadowAttenuation`（无参 `GetMainLight()` 恒返回 1，只改灯不会有一像素影子）。
+
+**操作**
+- **输入门**（`Scripts/InputModes.cs` + `PlayerMotor.WantsKeyboard`）：`KeyboardInput` 是总闸，`WantsKeyboard = KeyboardInput && (Panel == null || !Panel.IsInputFocused)` —— **门只认一件事：焦点在不在输入框**。门清的是**行走意图**（wish 换 0），速度仍按 Acceleration 收敛到 0，不是瞬停。E 只负责**进入**输入框（打字时 E 就是一个字母，不能抢焦点），退出交给 Esc 与点面板外；演出中（`CanTakeKeys` 为假）E 与 Esc 都不抢焦点。
+- **曾经有过第三态，已删除**：Esc 退出打字时把走路键盘「锁」上、等焦点回输入框才解。界面上没有任何提示，实机表现就是 YG m17495 第 4 条「方向键控制一会儿之后又失去控制」。现在锁与 `FocusChanged` 订阅一起删掉，门每帧直接问面板。
+- **输入框顺序与 IME**（`DialoguePanel`）：所有写值只走 `WriteInput`（`SetValueWithoutNotify` + `SetCaret`），补全/语音/发送后复位都走 `AppendToInput`/`ApplyComposition`/`WriteInput`，**没有第二条写值路**——「你以站起来吗可」那类错序就是两条写值路各插一次光标造成的。组合态用 `Input.compositionString`（`IMECompositionEvent` 在 6000.6.7f1 里不公开），组合期间 Enter 不发送、由 `ApplyComposition` 收尾；而且**不许 `StopPropagation`** —— 在 trickle 阶段掐断会把这一次候选上屏吞掉，字就跑到句尾或被丢掉（YG m17495 第 1 条「你以站起来吗可」）。
+- **相机骨架**（`PlayerCameraRig`）：新增 `CameraRigRoot`（只跟 head 位置、每帧世界旋转写回 identity），Pivot 挂它下面 —— 玩家的转身到这一层就断了，Cinemachine 在 LateUpdate 采样时不会再看到「本帧后半段才转的那几度」。`Apply()` 仍留在 `Update`（Brain 只在 LateUpdate 取景，晚写只会读到上一帧，270°/s 下每帧差 4.5°，更抖），同一帧最后一次转身由 `PlayerMotor.Tick` 尾部的 `_rig.Apply()` 补写。`TurnRate` 默认 720 → **270**（`Awake` 把序列化里的 720 迁移成 270）；`ReadWish` 改用 `rig.IntentYaw`，不再读渲染相机的欧拉角（那带着阻尼滞后，机器在追自己）。
+- **真第一人称**（`PlayerCameraRig`）：`Distance` 下限 0.6 m、`IsFirstPerson` = ≤1.2 m；`EaseFollow` 在 **0.15 s** 内把 CameraDistance/竖臂/肩位/CameraSide 一起收（肩位不收会让相机偏到脸颊外侧，实测残差 0.284 m），FP 时阻尼归零；`PlayerBody.NearDistance = 1.25` 比 1.2 松 5 cm，极端帧率下也不会「已经第一人称、后脑勺还在画面里」。滚轮灵敏度只在 `AddOrbit` 里乘一次，上推抬高镜头（加号）。
+
+**判据与实测（`tools/look-compare.mjs` / `tools/shadow-diff.mjs`）**
+- 修好 post 链后的实测：脸颊 B/R **0.69**（限 ≤0.90）、脸峰值 **0.743**（限 ≤0.92）、房间对比度 **0.675**（限 ≥0.35）、描边 **3 px**（720p 折算限 1.0，1080p 档 ≈2.25 px）、脚下亮度比 **1.273**（限 ≤1.30）、阴影像素差 **下半幅 5.54%**（限 ≥3%，全画面 2.77%、最深 68.2%），六项全 PASS、`look-shoot.ps1` exit 0。一条命令跑完：`tools/look-shoot.ps1`（player → capture -noShadows 1 → 归档 `.superpowers/look/<date>/` → 两个检查，exit = 失败项数）。
+- **三处测量口径是量出来定的，不是放宽阈值**：① 脸峰值取 99.5 分位而非 max（单像素高光与木家具暖色像素不该决定脸糊没糊）；② 描边取「长度 ≤10 px 暗带的 75 分位」而非 max（家具宽边会把最大长度顶成假数）；③ 阴影像素差的分母取**下半幅**（影子只落在照得到直射光的地板与床，上半幅是吊顶与墙，用全画面当分母等于让吊顶像素摊薄地板影子）。脚下光斑改代码级判据（`RoomLightTests` 断言 0.6 m 以下无点光、四盏吊顶光不投影），八角度绕圈的地面极差会被几何主导。
+- 计数：EditMode **89/89/0/0**（14:06:54Z）、PlayMode **225/224/0/1**（14:07:27Z，跳过 `BridgeSmokeTests.UiSceneShot`）；六门终跑 `summary: 6/6 ok`（web 10.2 s / bridge 11.1 s / unity-edit 29.3 s / unity-play 62.7 s / smoke 68.7 s / player 6.1 s，日志 `apps/unity/Logs/s-round4-check.log`）。IL2CPP 包在 20:22 重编过（`build/GameAssembly.dll` 37,650,944 B、`global-metadata.dat` 10,917,172 B），player 门跑的就是这个新包。
+- **URP 会自己重写 prefiltering 开关**：`m_PrefilterSoftShadows` 在某一轮测试后被 URP 序列化回 0（软阴影变体被剥），表现是用例红而画面看着没事（主光阴影不走这条 prefilter）。用例因此改成断「不是 Disabled（0）」而不是「恰好等于 1」，同时把开关显式写回 1。`m_PrefilteringModeAdditionalLightShadows` 现在是 **2（Auto）**，也合法。
+- **红证**：渲染侧 `RoomLightTests` 四条先全红再实现（`apps/unity/TestResults/EditMode.xml` 4 failed）；controls Task 3 编译红 `Logs/c3-task3-red-compile.log`（CS1061 `AxisInput`/`IntentYaw`）、行为红 `Logs/s1-task3-red.xml`（223/219/**3**/1：绕圈 Pivot 残差 0.64°、Wish 方向 (1,0) 应为 (0,−1)、AMouseLocked 残差 −120°）、Task 4 红 `Logs/c4-task4-red.log`（226/222/**3**/1：Pitch −10、Distance 0.9、NearDistance 1.2 不小于 1.2）；变异红 `Logs/c3-task3-mutant-2.xml`（去掉 Tick 里的 `Apply` → 绕圈残差符号翻转 1 次）、`Logs/c4-task4-mutant-1.xml`（EyeGap 0.05→0.45 → 相差 0.450 m）。
+- **两条已知限制**：① 变异「把 Pivot 挂回 head」**没被抓住**（223/222/0/1 全绿，`Logs/c3-task3-mutant-1.xml`）——转身后补写 `Apply` 已经把父节点转身造成的漂移抹平，结构本身在批处理里不可观察，用例真正钉住的是那行 `Apply`；② controls Task 4 的严格 TDD 不成立（FP 字段在 Task 3 的整文件重写里已落地，红证靠回退 0.9/减号造出），真实缺陷是首轮绿跑抓到的两条（灵敏度乘两遍、FP 肩位未归零 0.284 m）。
+
 ## 6. 四件动作的验收判据（可测，不靠肉眼）
 
 | 动作 | 判据 |
@@ -317,6 +355,7 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - **P5 回归与归档**：smoke 覆盖到四件动作（含第 6 节判据）；全绿后把 **web 版降级归档**（单开一步，不混在功能提交里）。
 - **P6 打包**：IL2CPP 出包，双击可跑；桥接与 AstrBot 的启动顺序、失败提示。
 - **P7 语音与身体**：TTS 逐句播放 + 字幕；锚点间走位（边表 + 胶囊扫掠）；玩家身体 Me.vrm（编辑器/PlayMode/截图）。明细见 §5.23。
+- **P8 观感与操作对齐**：管线归位（Linear + 全局 Volume + 删手写 ACES）、灯与阴影、MToon 明暗与描边、输入门与 IME 字符顺序、相机骨架与真第一人称，判据由 `tools/look-compare.mjs`/`shadow-diff.mjs` 数值化。明细见 §5.24。
 
 ## 8. 已由 YG 拍板的两件事（2026-11-01）
 
