@@ -9,6 +9,7 @@ namespace Mas3D.Boot
     ///   -bridge host:port / -bridge port   桥接地址；只给端口时用本机回环
     ///   -token &lt;str&gt;                    临时令牌，优先于磁盘上那一份
     ///   -selftest &lt;path&gt;                 自检模式的落盘路径（Task 3 用）
+    ///   -nobody [0|1]                    不给玩家挂身体（P7 Task 3）；不写值等于 1
     /// 其余参数一律忽略：-batchmode / -logFile / -projectPath 之类是 Unity 自己的，认不出来不算错。
     ///
     /// 非法端口不猜：HasBridge=false + 一条警告。把"地址写错了"伪装成"连上了但没反应"，
@@ -34,13 +35,20 @@ namespace Mas3D.Boot
         /// <summary>命令行是否显式指定了桥接地址。</summary>
         public readonly bool HasBridge;
 
-        BootArgs(string host, int port, string token, string selfTestPath, bool hasBridge)
+        /// <summary>
+        /// -nobody 开着就不给玩家挂 VRM。留这个开关不是为了好看：截图机位、离线对比、以及
+        /// "身体是不是把某条回归弄红了"这类二分，都需要一个没有身体的玩家。
+        /// </summary>
+        public readonly bool NoBody;
+
+        BootArgs(string host, int port, string token, string selfTestPath, bool hasBridge, bool noBody)
         {
             Host = host;
             Port = port;
             Token = token;
             SelfTestPath = selfTestPath;
             HasBridge = hasBridge;
+            NoBody = noBody;
         }
 
         /// <summary>host:port，日志行直接拼它。</summary>
@@ -57,6 +65,26 @@ namespace Mas3D.Boot
             string token = null;
             string selfTest = null;
             var hasBridge = false;
+            var noBody = false;
+
+            // 单独先扫一遍 -nobody：它允许不写值（-nobody 就是开），而下面那条循环按"键值成对"走，
+            // 结尾孤零零的开关会被 i + 1 的边界直接跳过。
+            if (args != null)
+            {
+                for (var i = 0; i < args.Length; i++)
+                {
+                    if (!string.Equals(args[i], "-nobody", System.StringComparison.OrdinalIgnoreCase)) continue;
+                    if (i + 1 < args.Length && IsFlagValue(args[i + 1]))
+                    {
+                        noBody = ParseSwitch(args[i + 1]);
+                        i++;
+                    }
+                    else
+                    {
+                        noBody = true;
+                    }
+                }
+            }
 
             if (args != null)
             {
@@ -94,7 +122,39 @@ namespace Mas3D.Boot
                 }
             }
 
-            return new BootArgs(host, port, token, selfTest, hasBridge);
+            // -token -nobody 这种写法：值会被预扫当成开关，令牌就变成了字符串 "-nobody"。
+            // 与其带着一个假令牌去撞 401，不如当作没给（桥接回 401，播报照常降级）。
+            if (token != null && token.StartsWith("-", System.StringComparison.Ordinal))
+            {
+                Debug.LogWarning("[boot] -token 的值看起来是另一个开关（" + token + "），按没给令牌处理");
+                token = null;
+            }
+
+            return new BootArgs(host, port, token, selfTest, hasBridge, noBody);
+        }
+
+        /// <summary>下一个参数是"值"还是"另一个开关"：以 - 开头就当成开关，别把 -selftest 吃掉。</summary>
+        static bool IsFlagValue(string value)
+        {
+            return !string.IsNullOrEmpty(value) && !value.StartsWith("-", System.StringComparison.Ordinal);
+        }
+
+        /// <summary>0/false/off/no 是关，1/true/on/yes 是开；认不出来的值按开处理，并留一条警告。</summary>
+        static bool ParseSwitch(string value)
+        {
+            var text = (value ?? string.Empty).Trim();
+            if (text == "0"
+                || text.Equals("false", System.StringComparison.OrdinalIgnoreCase)
+                || text.Equals("off", System.StringComparison.OrdinalIgnoreCase)
+                || text.Equals("no", System.StringComparison.OrdinalIgnoreCase)) return false;
+
+            if (text == "1"
+                || text.Equals("true", System.StringComparison.OrdinalIgnoreCase)
+                || text.Equals("on", System.StringComparison.OrdinalIgnoreCase)
+                || text.Equals("yes", System.StringComparison.OrdinalIgnoreCase)) return true;
+
+            Debug.LogWarning("[boot] 看不懂的 -nobody 取值：" + text + "（按开处理）");
+            return true;
         }
 
         /// <summary>

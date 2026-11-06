@@ -115,5 +115,16 @@ namespace Mas3D.Tests
 
             Assert.AreEqual("ws://127.0.0.1:9001/mas3d/ws", settings.Url, "只给端口时接本机回环");
         }
+
+        [Test]
+        public void ATokenThatLooksLikeAFlagIsIgnoredInsteadOfBeingSent()
+        {
+            // -token -nobody：预扫把 -nobody 当开关吃掉，主循环又把 "-nobody" 当令牌。
+            // 带着一个假令牌去撞 401 比不带更糟——错误信息会指向"令牌不对"，而真相是命令行写错了。
+            var boot = BootArgs.Parse(new[] { "-token", "-nobody" });
+
+            Assert.IsNull(boot.Token, "看起来像开关的值不算令牌");
+            Assert.IsTrue(boot.NoBody, "-nobody 本身照旧生效");
+        }
     }
 }
