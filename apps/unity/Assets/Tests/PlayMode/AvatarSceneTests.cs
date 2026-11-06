@@ -153,13 +153,16 @@ namespace Mas3D.Tests
         }
 
         /// <summary>
-        /// Standing has to take the body away. FitBody places the capsule from the <b>live</b> hips
-        /// joint, so a capsule fitted while seated freezes where the seated body was once she stands;
-        /// no component tells the actor that Stand happened, so it has to notice on its own. The
-        /// negative control at the end pins the other half: sitting down again grows the body back.
+        /// The capsule has to follow the pose, not the seat. This case used to pin the opposite —
+        /// "standing removes the body" — because a capsule fitted while seated would otherwise freeze
+        /// where the seated body was. P7 task 2 killed that reading: an avatar walking through the room
+        /// with no collider is an avatar the player sweeps straight through, so standing now keeps the
+        /// same capsule and re-reads the hips. What still has to hold is that <b>one</b> collider
+        /// exists at all times, that standing and sitting reuse the same instance, and that its centre
+        /// tracks the pose's hips rather than staying behind.
         /// </summary>
         [UnityTest]
-        public IEnumerator StandingTakesTheBodyAway()
+        public IEnumerator StandingKeepsTheBodyOnTheStandingHips()
         {
             SceneFlow.Require();
 
@@ -171,7 +174,11 @@ namespace Mas3D.Tests
                 yield return WaitUntilSeated(found => actor = found);
                 Assert.IsNotNull(actor, "主场景里必须有 AvatarActor");
                 Assert.IsNotNull(actor.Body, "落座后该有胶囊");
-                Assert.IsNotNull(actor.GetComponent<CapsuleCollider>(), "落座后该有胶囊");
+
+                var seated = actor.Body;
+                var seatedLift = actor.transform.TransformPoint(seated.center) - actor.Seat.HipsWorld;
+                Assert.AreEqual(AvatarActor.BodyLift, seatedLift.y, 0.02f,
+                    "坐姿胶囊该按座面放，实测上抬 " + seatedLift.y.ToString("F3"));
 
                 var a5 = AnchorTable.Load().Anchor("A5");
                 Assert.IsNotNull(a5, "anchors.json 里必须有 A5");
@@ -179,13 +186,24 @@ namespace Mas3D.Tests
                 yield return null;
                 yield return null;
 
-                Assert.IsNull(actor.Body, "站起后胶囊必须移除，否则玩家在长凳前撞空气");
-                Assert.IsNull(actor.GetComponent<CapsuleCollider>(),
-                    "站起后胶囊必须移除，否则玩家在长凳前撞空气");
+                var standing = actor.Body;
+                Assert.IsNotNull(standing, "站起后仍要有胶囊，否则走着的她从玩家身上穿过去");
+                Assert.AreSame(seated, standing, "胶囊该复用同一根，不是新长一根");
+                Assert.AreEqual(1, actor.GetComponents<CapsuleCollider>().Length, "任何时刻只能有一根胶囊");
+                Assert.AreEqual(AvatarActor.BodyRadius, standing.radius, 1e-3f, "站姿胶囊半径该是 BodyRadius");
+                Assert.AreEqual(AvatarActor.BodyHeight, standing.height, 1e-3f, "站姿胶囊高该是 BodyHeight");
+
+                var standingLift = actor.transform.TransformPoint(standing.center) - actor.Seat.HipsWorld;
+                Assert.AreEqual(AvatarActor.BodyLift, standingLift.y, 0.02f,
+                    "站姿胶囊该按站姿髋高放，实测上抬 " + standingLift.y.ToString("F3"));
 
                 actor.SitAt("S1");
                 yield return null;
                 Assert.IsNotNull(actor.Body, "重新落座必须重新长出胶囊");
+                Assert.AreSame(seated, actor.Body, "重新落座该复用同一根胶囊");
+                var againLift = actor.transform.TransformPoint(actor.Body.center) - actor.Seat.HipsWorld;
+                Assert.AreEqual(AvatarActor.BodyLift, againLift.y, 0.02f,
+                    "回到座位该按座面重放，实测上抬 " + againLift.y.ToString("F3"));
             }
             finally
             {

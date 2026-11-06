@@ -181,8 +181,15 @@ namespace Mas3D.Avatar
 
         /// <summary>
         /// Place the capsule from the live hips joint. Safe to call repeatedly; the collider is
-        /// reused. When she is not seated there is no height to measure against, so the capsule is
-        /// removed instead of left floating where the seated body used to be.
+        /// reused. Both poses go through the same line on purpose: the hips joint is the only
+        /// placement source this body has, so a seated capsule sits on the seat and a standing
+        /// capsule sits on the standing hip height. Keeping one source means there is no second set
+        /// of numbers to drift out of step with the pose (P7 task 2).
+        ///
+        /// Standing used to remove the capsule, which left a walking avatar the player could sweep
+        /// straight through. A body she can be walked through is not a body, so the standing branch
+        /// keeps the same radius and height and only re-reads where the hips are. A rig without a
+        /// hips joint still gets no capsule: there is nothing to measure against.
         /// </summary>
         public void FitBody()
         {
@@ -190,7 +197,8 @@ namespace Mas3D.Avatar
             var existing = GetComponent<CapsuleCollider>();
             if (existing == _removed) existing = null;
 
-            if (Seat == null || !Seat.Seated)
+            var hips = Rig != null ? Rig.Bone(HumanBodyBones.Hips) : null;
+            if (Seat == null || hips == null)
             {
                 if (existing != null)
                 {
@@ -207,9 +215,11 @@ namespace Mas3D.Avatar
             body.radius = BodyRadius;
             body.height = BodyHeight;
             body.isTrigger = false;
-            body.center = transform.InverseTransformPoint(Seat.HipsWorld + Vector3.up * BodyLift);
+            body.center = transform.InverseTransformPoint(hips.position + Vector3.up * BodyLift);
             Body = body;
-            _bodyFitted = true;
+            // LateUpdate refits whenever this stops matching the seat state; standing keeps the
+            // capsule, so the flag must follow Seat.Seated and not "did we fit anything".
+            _bodyFitted = Seat.Seated;
         }
 
         /// <summary>

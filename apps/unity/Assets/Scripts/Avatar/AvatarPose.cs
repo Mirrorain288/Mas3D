@@ -117,6 +117,22 @@ namespace Mas3D.Avatar
             }
         }
 
+        /// <summary>
+        /// Arms at the sides, for a model that has to stand there and look like a person. This is the
+        /// sitting table's upper-arm half with a much smaller elbow bend: the imported rest pose is a
+        /// T-pose, and a player standing in a T reads as a broken rig, not as somebody waiting.
+        /// </summary>
+        static readonly (HumanBodyBones bone, Vector3 euler)[] ArmsDownTable =
+        {
+            (HumanBodyBones.LeftUpperArm, new Vector3(0f, 0f, 74f)),
+            (HumanBodyBones.RightUpperArm, new Vector3(0f, 0f, -74f)),
+            (HumanBodyBones.LeftLowerArm, new Vector3(0f, 12f, 0f)),
+            (HumanBodyBones.RightLowerArm, new Vector3(0f, -12f, 0f)),
+        };
+
+        /// <summary>Standing, with the arms brought down from the T-pose.</summary>
+        public static void ArmsDown(AvatarRig rig) => Apply(rig, ArmsDownTable);
+
         /// <summary>Put every captured bone back on its rest rotation.</summary>
         public static void Standing(AvatarRig rig)
         {
