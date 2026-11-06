@@ -149,7 +149,6 @@ namespace Mas3D.Editor
                 lamp = ParseFloat(args, "-lamp", baseline.lamp),
                 glow = ParseFloat(args, "-glow", baseline.glow),
                 bounce = ParseFloat(args, "-bounce", baseline.bounce),
-                floorBounce = ParseFloat(args, "-floorBounce", baseline.floorBounce),
                 temperature = ParseFloat(args, "-wbTemp", baseline.temperature),
                 tint = ParseFloat(args, "-wbTint", baseline.tint),
                 postExposure = ParseFloat(args, "-postExposure", baseline.postExposure),

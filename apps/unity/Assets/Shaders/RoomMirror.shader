@@ -25,9 +25,6 @@ Shader "Mas3D/Mirror"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
 
-            float _RoomExposure;
-            float _RoomSaturation;
-
             CBUFFER_START(UnityPerMaterial)
                 half4 _Color;
                 half4 _RimColor;
@@ -74,11 +71,7 @@ Shader "Mas3D/Mirror"
 
                 color += _Color.rgb * SampleSH(n) * 0.6h;
 
-                color *= _RoomExposure;
-                const half a = 2.51h, b = 0.03h, c = 2.43h, d = 0.59h, e = 0.14h;
-                color = saturate((color * (a * color + b)) / (color * (c * color + d) + e));
-                half luma = dot(color, half3(0.2126h, 0.7152h, 0.0722h));
-                color = lerp(luma.xxx, color, _RoomSaturation);
+                // 调色统一交给 RoomLook 的全局 Volume（房间与角色同一条 ACES 曲线）。
                 return half4(color, 1);
             }
             ENDHLSL

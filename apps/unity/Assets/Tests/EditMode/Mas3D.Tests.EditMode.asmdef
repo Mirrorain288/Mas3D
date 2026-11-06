@@ -4,7 +4,12 @@
     "references": [
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner",
-        "Mas3D.Runtime"
+        "Mas3D.Runtime",
+        "Mas3D.Editor",
+        "Unity.RenderPipelines.Universal.Runtime",
+        "Unity.RenderPipelines.Core.Runtime",
+        "VRM10",
+        "VRM10.MToon10"
     ],
     "includePlatforms": [
         "Editor"
@@ -19,6 +24,12 @@
     "defineConstraints": [
         "UNITY_INCLUDE_TESTS"
     ],
-    "versionDefines": [],
+    "versionDefines": [
+        {
+            "name": "com.unity.render-pipelines.universal",
+            "expression": "",
+            "define": "MTOON_URP"
+        }
+    ],
     "noEngineReferences": false
 }

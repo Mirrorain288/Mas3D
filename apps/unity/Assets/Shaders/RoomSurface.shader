@@ -24,14 +24,17 @@ Shader "Mas3D/RoomSurface"
             #pragma multi_compile _ _ADDITIONAL_LIGHTS_VERTEX _ADDITIONAL_LIGHTS
             #pragma multi_compile _ _FORWARD_PLUS
             #pragma multi_compile_fragment _ _SCREEN_SPACE_OCCLUSION
+            // 阴影：主光是月光，要从窗外把床、柜、人的影子铺到地板上；附带光只有床边台灯，
+            // 也吃软阴影（URP 资产里两个 prefilter 开关已打开）。
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
+            #pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
+            #pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Core.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/Lighting.hlsl"
             #include "Packages/com.unity.render-pipelines.universal/ShaderLibrary/AmbientOcclusion.hlsl"
 
             TEXTURE2D(_MainTex);
             SAMPLER(sampler_MainTex);
-            float _RoomExposure;
-            float _RoomSaturation;
 
             CBUFFER_START(UnityPerMaterial)
                 float4 _MainTex_ST;
@@ -72,20 +75,23 @@ Shader "Mas3D/RoomSurface"
                 half3 albedo = SAMPLE_TEXTURE2D(_MainTex, sampler_MainTex, i.uv).rgb * _Color.rgb;
                 float3 n = normalize(i.normalWS);
 
-                Light mainLight = GetMainLight();
+                // 主光必须带 shadowCoord 才能拿到 shadowAttenuation：无参的 GetMainLight()
+                // 恒返回 1，阴影等于没开（2026-11-06 评审 R17）。
+                float4 shadowCoord = TransformWorldToShadowCoord(i.positionWS);
+                Light mainLight = GetMainLight(shadowCoord);
                 half ndl = saturate(dot(n, mainLight.direction));
-                half3 color = albedo * mainLight.color * ndl;
+                half3 color = albedo * mainLight.color * ndl * mainLight.shadowAttenuation;
 
                 uint count = GetAdditionalLightsCount();
                 for (uint li = 0u; li < count; li++)
                 {
                     Light light = GetAdditionalLight(li, i.positionWS);
                     half extra = saturate(dot(n, light.direction));
-                    color += albedo * light.color * extra * light.distanceAttenuation * 0.7h;
+                    color += albedo * light.color * extra * light.distanceAttenuation
+                             * light.shadowAttenuation * 0.7h;
                 }
 
-                // Screen space occlusion replaces the contact shadows this build cannot render:
-                // the URP shadow path corrupts texture sampling, but SSAO only touches ambient.
+                // SSAO 只吃环境项，和上面两条阴影各管一段：阴影管直射光的遮挡，SSAO 管缝隙里的环境光。
                 half ao = 1.0h;
                 #if defined(_SCREEN_SPACE_OCCLUSION)
                     AmbientOcclusionFactor aoFactor =
@@ -98,13 +104,8 @@ Shader "Mas3D/RoomSurface"
 
                 color += albedo * SampleSH(n) * _AmbientStrength * ao;
 
-                // Grading lives in the shader because the URP volume stack does not reach this
-                // camera; ACES keeps the linen from clipping the way a raw copy does.
-                color *= _RoomExposure;
-                const half a = 2.51h, b = 0.03h, c = 2.43h, d = 0.59h, e = 0.14h;
-                color = saturate((color * (a * color + b)) / (color * (c * color + d) + e));
-                half luma = dot(color, half3(0.2126h, 0.7152h, 0.0722h));
-                color = lerp(luma.xxx, color, _RoomSaturation);
+                // 调色不在这里做：曝光/ACES/饱和度统一由 RoomLook 建的全局 Volume 承担，
+                // 这样房间与 MToon 角色走同一条色调曲线（见 docs/.../2026-11-06-art-and-controls-alignment-design.md G1）。
                 return half4(color, 1);
             }
             ENDHLSL

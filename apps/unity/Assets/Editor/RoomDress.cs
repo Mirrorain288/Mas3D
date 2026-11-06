@@ -75,18 +75,22 @@ namespace Mas3D.Editor
         [Serializable]
         public class Tuning
         {
-            // Fixed against the web A+ build with the custom surface shader: the window light is
-            // weak on purpose, the warm lamp and the ceiling plate carry the room.
-            public float moon = 1.2f;
-            public float lamp = 1.2f;
-            public float glow = 2.0f;
-            public float bounce = 0.9f;
-            public float floorBounce = 0.55f;
+            // Re-based for Linear + ACES (RoomLook owns the grade now). The old numbers were
+            // tuned while the room shader graded itself in gamma; kept as-is they read twice as hot.
+            public float moon = 1.1f;
+            public float lamp = 1.1f;
+            public float glow = 1.6f;
+            // Cold ambient fill from the window side. There is no floor bounce any more: the low
+            // point light lit a round spot under her feet and vanished at some angles once the
+            // per-object additional-light budget rotated it out.
+            public float bounce = 0.18f;
             public float temperature = 14f;
             public float tint = 0f;
-            public float postExposure = -1.2f;
-            public float contrast = 10f;
-            public float saturation = 60f;
+            // Grade lives in RoomLook now; these defaults mirror its constants so a capture
+            // that passes only light levels still lands on the shipped look.
+            public float postExposure = RoomLook.PostExposure;
+            public float contrast = 18f;
+            public float saturation = 15f;
             // A 2048 shadow map stretched over a 30 m shadow distance needs a bias far larger
             // than the default, or the parallel light smears acne across every flat wall.
             public float shadowBias = 0.06f;
@@ -518,7 +522,9 @@ namespace Mas3D.Editor
             moonGo.transform.LookAt(new Vector3(bounds.center.x, 0.5f, bounds.center.z));
             var moon = moonGo.AddComponent<Light>();
             moon.type = LightType.Directional;
-            moon.color = Hex(0xbcd6ff);
+            // Picked from the skin sweep of 2026-11-06 (variant 4, "paler"): the old 0xffe2d2 key
+            // plus the 0xffb877 lamp pulled her cheeks to B/R 0.688 against the reference 0.829.
+            moon.color = Hex(0xfffaf7);
             moon.intensity = RoomLook.Scale(tuning.moon);
             moon.shadows = tuning.moonShadows ? LightShadows.Soft : LightShadows.None;
             moon.shadowStrength = 0.85f;
@@ -530,52 +536,50 @@ namespace Mas3D.Editor
             lampGo.transform.position = new Vector3(bounds.center.x - bounds.size.x * 0.12f, 1.05f, bounds.center.z + bounds.size.z * 0.18f);
             var lamp = lampGo.AddComponent<Light>();
             lamp.type = LightType.Point;
-            lamp.color = Hex(0xffb877);
-            lamp.intensity = RoomLook.Scale(tuning.lamp);
+            // 0xffe6d6 at 60%: the reference skin is cooler than the old 0xffb877 tungsten, but
+            // the lamp still has to read as a warm accent in the corner.
+            lamp.color = Hex(0xffe6d6);
+            lamp.intensity = RoomLook.Scale(tuning.lamp * 0.6f);
             lamp.range = 6f;
-            lamp.shadows = LightShadows.None;
+            // The only light close to her body, so it is the one that has to draw a soft shadow.
+            lamp.shadows = LightShadows.Soft;
 
             // Soft warm plate light under the ceiling; no shadows, otherwise the plate
             // throws the whole room into shade.
             // One lamp right under the plate burns a white hole in the ceiling, so the glow is
             // split into a pair hung ~1.2 m below it: same total lift, much flatter falloff.
+            // Four shallow point lights hung just under the flat ceiling, spread along the long
+            // axis: two left the far corners black, one burned a white hole in the plate, and the
+            // old pair sat 1.75 m low where they read as lamps floating in the room.
             Light glow = null;
-            for (var i = 0; i < 2; i++)
+            _glows.Clear();
+            // Hung a little lower than the plate (0.55 m, not 0.35): at 0.35 the inverse-square
+            // falloff paints four bright streaks across the ceiling that read as lamps on show.
+            var glowY = eaveY - 0.55f;
+            var spread = new[] { -0.33f, -0.11f, 0.11f, 0.33f };
+            for (var i = 0; i < spread.Length; i++)
             {
                 var glowGo = new GameObject("ceiling-glow-" + (i + 1));
                 glowGo.transform.SetParent(root.transform, false);
-                var offset = (i == 0 ? -1f : 1f) * bounds.size.x * 0.22f;
-                // Hung low and reaching far: the plate still lifts the room, but the falloff
-                // is flat enough that the ceiling stops showing a hot spot.
-                glowGo.transform.position = new Vector3(bounds.center.x + offset, eaveY - 1.75f, bounds.center.z);
+                glowGo.transform.position = new Vector3(bounds.center.x + spread[i] * bounds.size.x, glowY, bounds.center.z);
                 var light = glowGo.AddComponent<Light>();
                 light.type = LightType.Point;
-                light.color = Hex(0xffdcb8);
-                light.intensity = RoomLook.Scale(tuning.glow);
-                light.range = 13f;
+                light.color = Hex(0xfff7f0);
+                // Half of the old level per lamp: four lamps at the old level wash the room out.
+                light.intensity = RoomLook.Scale(tuning.glow * 0.5f);
+                light.range = 10f;
                 light.shadows = LightShadows.None;
                 if (glow == null) glow = light;
                 else _glows.Add(light);
             }
 
-            // The wood floor sits below every lamp, so it renders muddy without a low warm
-            // source that only the floor plane can see.
-            var floorGo = new GameObject("floor-bounce");
-            floorGo.transform.SetParent(root.transform, false);
-            floorGo.transform.position = new Vector3(bounds.center.x, 0.32f, bounds.center.z);
-            var floorLight = floorGo.AddComponent<Light>();
-            floorLight.type = LightType.Point;
-            floorLight.color = Hex(0xffe6cc);
-            floorLight.intensity = RoomLook.Scale(tuning.floorBounce);
-            floorLight.range = 8.5f;
-            floorLight.shadows = LightShadows.None;
-
-            var fillGo = new GameObject("bounce");
+            // Cold sky fill from the window side, straight down the room's long axis.
+            var fillGo = new GameObject("fill");
             fillGo.transform.SetParent(root.transform, false);
             fillGo.transform.rotation = Quaternion.Euler(90f, 0f, 0f);
             var fill = fillGo.AddComponent<Light>();
             fill.type = LightType.Directional;
-            fill.color = Hex(0x8fa6d8);
+            fill.color = Hex(0xbdc2d1);
             fill.intensity = RoomLook.Scale(tuning.bounce);
             fill.shadows = LightShadows.None;
 
@@ -591,21 +595,17 @@ namespace Mas3D.Editor
             _lamp = lamp;
             _glow = glow;
             _fill = fill;
-            _floor = floorLight;
-            Debug.Log($"[dress] lights moon={moon.intensity} lamp={lamp.intensity} glow={glow.intensity} eaveY={eaveY:F2}");
+            Debug.Log($"[dress] lights moon={moon.intensity} lamp={lamp.intensity} glow={glow.intensity}x{_glows.Count + 1} fill={fill.intensity} eaveY={eaveY:F2}");
         }
 
         /// <summary>
-        /// The web scene renders through ACES tone mapping; URP without it clips every lit
-        /// surface to white, which is what made the first Unity captures look washed out.
-        /// A volume profile never reaches this camera, so exposure and grading are pushed as
-        /// globals that the room shaders read before their own ACES curve.
+        /// 出图用的调色：与运行时同一个入口（RoomLook 建的全局 Volume），
+        /// 所以截图与打包画面不会因为走了两条路而分叉。
         /// </summary>
         public static void ApplyColour(Tuning tuning)
         {
-            Shader.SetGlobalFloat("_RoomExposure", RoomLook.Exposure(tuning.postExposure));
-            Shader.SetGlobalFloat("_RoomSaturation", Mathf.Clamp01(1f + tuning.saturation / 100f));
-            Debug.Log($"[dress] colour exposure={tuning.postExposure} curve={RoomLook.Exposure(tuning.postExposure):F2} lightScale={RoomLook.LightScale:F2} saturation={tuning.saturation}");
+            RoomLook.Apply(tuning.postExposure, tuning.saturation, tuning.contrast);
+            Debug.Log($"[dress] colour post={tuning.postExposure:F2} contrast={tuning.contrast:F1} saturation={tuning.saturation:F1} tonemap=ACES");
         }
 
         public const string SkyPath = "Assets/_Local/sky/night-sky-2k.jpg";
@@ -683,7 +683,6 @@ namespace Mas3D.Editor
         static Light _lamp;
         static Light _glow;
         static readonly List<Light> _glows = new List<Light>();
-        static Light _floor;
         static Light _fill;
 
         /// <summary>Re-applies light levels and grade without rebuilding the room, for sweeps.</summary>
@@ -700,7 +699,6 @@ namespace Mas3D.Editor
             if (_glow != null) _glow.intensity = RoomLook.Scale(t.glow);
             foreach (var extra in _glows) extra.intensity = RoomLook.Scale(t.glow);
             if (_fill != null) _fill.intensity = RoomLook.Scale(t.bounce);
-            if (_floor != null) _floor.intensity = RoomLook.Scale(t.floorBounce);
             ApplyColour(t);
         }
 
