@@ -57,6 +57,8 @@ namespace Mas3D.UI
         Label _thinking;
         ScrollView _log;
         Label _hint;
+        Label _subtitle;
+        string _subtitleText = string.Empty;
         bool _thinkingShown;
         bool _interactable = true;
         static Font _cjkFont;
@@ -153,6 +155,27 @@ namespace Mas3D.UI
             if (_status != null) _status.text = text ?? string.Empty;
         }
 
+        /// <summary>
+        /// 播报字幕（P7）：整块显示当前该露出的句子，空文本就收起。
+        ///
+        /// 为什么不塞进消息流：_entries 是"历史"，会被清空按钮、重连重画整段重排；
+        /// 字幕跟着音频走、随时换、播完停在原地，混进去只会把历史搅乱（既有的 LogText 断言也在看历史）。
+        /// </summary>
+        public void ShowSubtitle(string text)
+        {
+            _subtitleText = text ?? string.Empty;
+            EnsureBound();       // 树可能还没挂上：先记下来，绑定那一刻再补画（见 ApplySubtitle 调用点）
+            ApplySubtitle();
+        }
+
+        void ApplySubtitle()
+        {
+            if (_subtitle == null) return;
+            var hasText = !string.IsNullOrEmpty(_subtitleText);
+            _subtitle.text = hasText ? _subtitleText : string.Empty;
+            _subtitle.style.display = hasText ? DisplayStyle.Flex : DisplayStyle.None;
+        }
+
         /// <summary>把玩家的这一句追加进消息流（右对齐）。</summary>
         public void AppendPlayer(string text)
         {
@@ -213,6 +236,7 @@ namespace Mas3D.UI
             _status = root.Q<Label>("status");
             _thinking = root.Q<Label>("thinking");
             _log = root.Q<ScrollView>("log");
+            _subtitle = root.Q<Label>("subtitle");
 
             ApplyCjkFallback(root);
             if (_placeholder != null) _placeholder.text = PlaceholderCopy;
@@ -231,6 +255,7 @@ namespace Mas3D.UI
             RefreshCounter();
             RefreshPlaceholder();
             ApplyInteractable();
+            ApplySubtitle();     // 树重建后字幕不能丢：这里补画一次
         }
 
         /// <summary>
@@ -247,6 +272,7 @@ namespace Mas3D.UI
             if (_clear != null) _clear.clicked -= ClearLog;
             _boundDocument = null;
             _input = null;
+            _subtitle = null;    // 旧树上的元素：重新绑定时会换新的
         }
 
         static void DisableChip(VisualElement root, string name)
@@ -334,6 +360,8 @@ namespace Mas3D.UI
             EnsureBound();
             _entries.Clear();
             SyncLog();
+            // 字幕不属于历史（见 ShowSubtitle 的注释），但历史清空后它继续挂着就成了孤零零的旧话。
+            ShowSubtitle(string.Empty);
         }
 
         void ScrollToLatest()

@@ -1,5 +1,6 @@
 using Mas3D.Net;
 using Mas3D.UI;
+using Mas3D.Voice;
 using UnityEngine;
 
 namespace Mas3D.Conversation
@@ -35,6 +36,12 @@ namespace Mas3D.Conversation
         /// <summary>面板。消息流、状态词、输入锁都通过它落下去。</summary>
         public DialoguePanel Panel;
 
+        /// <summary>
+        /// 播报（P7）。留空就只是没有语音：会话状态机不依赖它，reply 照旧收尾。
+        /// 场景里由 RoomBootstrap 挂到同一个 GameObject 上。
+        /// </summary>
+        public ReplySpeaker Speaker;
+
         DialoguePanel _wiredPanel;
         BridgeClient _wiredClient;
 
@@ -57,6 +64,7 @@ namespace Mas3D.Conversation
 
         void OnDisable()
         {
+            if (Speaker != null) Speaker.Stop();   // 面板关掉/场景卸载：别让声音在后台继续
             Unwire();
         }
 
@@ -81,6 +89,9 @@ namespace Mas3D.Conversation
             if (Panel == null) return false;
             if (string.IsNullOrWhiteSpace(text)) return false;
             if (Phase == TurnPhase.Sending || Phase == TurnPhase.Thinking) return false;
+
+            // 新一轮真的开始了：上一轮的语音立刻停（不叠音）。被拒的提交不会走到这里，也就不会打断播放。
+            if (Speaker != null) Speaker.Stop();
 
             var say = text.Trim();
             Phase = TurnPhase.Sending;
@@ -148,6 +159,8 @@ namespace Mas3D.Conversation
                     Panel.AppendReply(frame.Text);
                     Panel.SetStatus(StatusAnswered);
                     Panel.Interactable = true;
+                    // 交出去的是 reply 的原文：切句与逐句字幕在播报那一层做，控制器只管"这一轮结束了"。
+                    if (Speaker != null) Speaker.Speak(frame.TurnId, frame.Text);
                     break;
 
                 case "error":
@@ -157,6 +170,8 @@ namespace Mas3D.Conversation
                     Panel.SetError(frame.Code == "timeout" ? DialoguePanel.TimeoutCopy : DialoguePanel.OfflineCopy);
                     Panel.SetStatus(StatusFailed);
                     Panel.Interactable = true;     // 失败之后要能再试；输入框里的草稿不动
+                    // 这一轮已经失败：正在播的声音与字幕都得停。否则状态写着「未回应」，耳机里还在说上一句。
+                    if (Speaker != null) Speaker.Stop();
                     break;
 
                 case "intent":
@@ -223,13 +238,21 @@ namespace Mas3D.Conversation
         }
 
         /// <summary>
-        /// 通道断了（Spec：MUST NOT 无限等待）。只在真的有回合在飞的时候收尾：启动阶段的重连失败
-        /// 不该把面板直接判成“未回应”，那时玩家还没发东西。
+        /// 通道断了（Spec：MUST NOT 无限等待）。两种时候要收尾：有回合在飞；或者 reply 已经落地、
+        /// 声音还在放 —— 后者若不管，界面写着“已回复”，耳机里的句子却来自一个已经死掉的连接。
+        /// 启动阶段的重连失败仍然什么都不改，那时玩家还没发东西。
         /// </summary>
         void OnClientFailed(string message)
         {
+            // 正在播就先停——这一步在 Panel 判空之前：没有面板也得把声音收掉，
+            // 断线后还在耳机里念上一轮是最不该留的状态。Stop 自带清字幕，别在这里再写一份。
+            bool wasSpeaking = Speaker != null && Speaker.Speaking;
+            if (wasSpeaking) Speaker.Stop();
+
             if (Panel == null) return;
-            if (Phase != TurnPhase.Sending && Phase != TurnPhase.Thinking) return;
+
+            bool inFlight = Phase == TurnPhase.Sending || Phase == TurnPhase.Thinking;
+            if (!inFlight && !wasSpeaking) return;
 
             Phase = TurnPhase.Failed;
             Panel.SetThinking(false);

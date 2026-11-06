@@ -16,6 +16,7 @@
         <ui:ScrollView name="log" class="log">
             <ui:Label name="thinking" text="她正在想…" class="line thinking" />
         </ui:ScrollView>
+        <ui:Label name="subtitle" text="" class="subtitle" style="display: none; margin-top: 6px; padding-left: 8px; padding-right: 8px; font-size: 13px; white-space: normal; color: rgb(232, 226, 214);" />
         <ui:VisualElement name="input-box" class="input-box">
             <ui:TextField name="input" class="input" multiline="true" />
             <ui:Label name="placeholder" text="和她说点什么（Enter 发送，Shift+Enter 换行）" class="placeholder" picking-mode="Ignore" />
