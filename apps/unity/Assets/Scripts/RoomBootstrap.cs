@@ -43,6 +43,13 @@ namespace Mas3D
         /// </summary>
         public ActionDirector Actions;
 
+        /// <summary>
+        /// Her legs. Boot creates it on her own object (the walker moves the actor root, so it must live
+        /// there) and never starts a walk: who she goes to and when is the conversation's call, not the
+        /// spawn's. An AvatarWalker already placed by hand wins, the same rule Actions follows.
+        /// </summary>
+        public AvatarWalker Walker;
+
         // The imported floor sits at y = 0.04; spawning exactly on it leaves the capsule
         // penetrating, and a penetrating CharacterController never reports itself grounded.
         public const float SpawnLift = 0.10f;
@@ -85,6 +92,17 @@ namespace Mas3D
                 if (anchor != null) Rig.SetOrbit(anchor.facingY, 14f);
             }
 
+            // 玩家身体接在相机之后：它要跟的是玩家的 transform 和眼睛高度，而"镜头贴到脸上时把头藏起来"
+            // 那条线读的是 Rig.Distance —— Rig 这一行上面才建好。挂在玩家身上（不是 Boot 这个对象上），
+            // 因为模型的父级就是这个 transform；-nobody 1 时不建，玩家回到那颗空胶囊，截图与回归都能照旧。
+            if (!StartupArgs.NoBody)
+            {
+                var body = Player.GetComponent<PlayerBody>();
+                if (body == null) body = Player.gameObject.AddComponent<PlayerBody>();
+                body.Attach(Player, Player.Head, Rig);
+                body.Spawn();
+            }
+
             // She is wired last: her gaze target is the player's head, which only exists after
             // EnsureReady, and her mood has to see the same controller the panel submits to.
             if (Actor != null)
@@ -125,6 +143,30 @@ namespace Mas3D
             Actions.Actor = Actor;
             Actions.Player = Player;
             Actions.Camera = Rig;
+
+            // 走位器挂在她身上而不是 Boot 上：它每 tick 挪的就是这个 transform，挂远了会多一层父子换算。
+            // 这里只给对象，不给目标 —— 她走不走、走去哪，是对话的决定，不是开场的决定。
+            if (Actor != null)
+            {
+                if (Walker == null) Walker = Actor.GetComponent<AvatarWalker>();
+                if (Walker == null) Walker = Actor.gameObject.AddComponent<AvatarWalker>();
+                Walker.Actor = Actor;
+                Walker.Conversation = Dialogue != null ? Dialogue : FindAnyObjectByType<ConversationController>();
+            }
+
+            // 播报挂在会话语义那一层（同一 GameObject）：reply 一到就要用面板落字幕、用桥接的地址和令牌
+            // 去请求语音。这里只交接对象，不读令牌 —— DialogueBridge 的执行顺序是 100、Boot 是默认 0，
+            // 此刻令牌还没从磁盘写进 Settings；播报持有同一块 Settings，等第一句回复时再读，
+            // 读不到还有 ReadTokenFromDisk() 兜底（见 ReplySpeaker.ResolveToken）。
+            if (Dialogue != null)
+            {
+                var speaker = Dialogue.GetComponent<ReplySpeaker>();
+                if (speaker == null) speaker = Dialogue.gameObject.AddComponent<ReplySpeaker>();
+                speaker.Panel = Dialogue.Panel != null ? Dialogue.Panel : FindAnyObjectByType<DialoguePanel>();
+                var settings = FindAnyObjectByType<DialogueBridge>();
+                speaker.Settings = settings != null && settings.Settings != null ? settings.Settings : new BridgeSettings();
+                Dialogue.Speaker = speaker;
+            }
 
             Debug.Log($"[room] colliders={ColliderCount} spawn={(anchor != null ? anchor.id : "none")} at={(anchor != null ? anchor.x.ToString("F2") + "," + anchor.z.ToString("F2") : "-")}");
 
