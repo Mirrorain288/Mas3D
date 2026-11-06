@@ -62,6 +62,7 @@ powershell -ExecutionPolicy Bypass -File tools/unity.ps1 build -Out build/Dev/Ma
 - 换机器先装 IL2CPP 模块，否则只报 `Error building Player: Currently selected scripting backend (IL2CPP) is not installed.`。装它：`unity install-modules -e 6000.6.7f1 -m windows-il2cpp --accept-eula -y --no-elevate --retries 2`（本机实测下载 258.93 MB、落地 1.04 GB；机器级改动，不在仓库里）。
 - 同一个输出目录别跨后端复用：里面放过 Mono 包，再切 IL2CPP 会 `Build path contains a project previously built with the Mono2x scripting backend`。脚本不自动清目录（怕误删），换后端请换目录或手工清空。
 - 启动顺序与令牌：先起 AstrBot（插件监听 `127.0.0.1:8790`），再开 exe；反了会在提示条上看到「连不上桥接 … 先启动 AstrBot」，后台退避重连、桥接起来自动连上。令牌按 `<仓库>/apps/bridge/data/mas3d/token`（exe 在仓库 `build/` 里时就是这份，仓库根 = exe 所在目录的上一级）→ `<exe 目录>/mas3d-token` → `<persistentDataPath>/token` 取第一个非空，所以 `build/Mas3D.exe` 双击就能连；`-token` 仍可覆盖。细节见根 README 快速开始与 spec §5.22。
+- 玩家身体截图入口：`-executeMethod Mas3D.Editor.CliBody.Capture`（`apps/unity/Assets/Editor/CliBody.cs`），产物落 `apps/unity/Shots/`；`test` / `build` 的用法没变。
 
 ## 玩家包自检（player-smoke）
 

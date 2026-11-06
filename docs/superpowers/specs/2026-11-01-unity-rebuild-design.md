@@ -269,6 +269,34 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - **check 的第六门**：`tools/check.ps1` 现在是六道门 `web → bridge → unity-edit → unity-play → smoke → player`，`player` 门调 `player-smoke.ps1`（日志 `check-player.log`），只按子进程退出码判；`-SkipPlayer` 跳过，缺 `build/Mas3D.exe` 或子进程给 2 都记 SKIP（进 `note: skipped …`，不进分母，不伪装成通过）。实测单开 player 门 `player PASS exit=0 6.7s` + `summary: 1/1 ok (5 skipped)`；门序 web+player `2/2 ok (4 skipped)`。完整一轮因此从约 9 分钟涨到 9–12 分钟。
 - **已知限制**：`-Target` 只有 Windows 一条腿（`CliBuild` 硬编码 `StandaloneWindows64` 与 `SetScriptingBackend(Standalone, IL2CPP)`）；产物里带 `Mas3D_BackUpThisFolder_ButDontShipItWithYourGame` 符号备份，发版别带；输出目录跨后端复用会炸（见上）。
 
+### 5.23 P7 语音 · 走位 · 玩家身体（2026-11-06 实测）
+
+- **一次只发一句**：`POST /mas3d/api/voice/synth`，body 是 `{"text":"<当前这一句>"}`，**不带 `sentence` 下标**。桥接先中译英、再按**英文句**切分取下标（`apps/bridge/tts.py:363-368`），中英句数对不齐：早期实现送中文句下标，句数少时尾部不播、句数多时拿到 400 被当成「播完了」静默收尾（`UnityWebRequestTtsTransport.cs:156-162` 的注释记的就是这次教训）。
+- **音频与令牌**：拿到 `audioUrl` 再 `GET`；**只有同源（scheme/host/port 全同）才带 `Authorization: Bearer`**（`UnityWebRequestTtsTransport.cs:115-142`），绝对 CDN 地址裸取——不把桥接令牌发给别人。桥接侧另认 `?token=`（`apps/bridge/web_api.py:112`）。
+- **交出去的音频是传输层自己拷的一份**：`DownloadHandlerAudioClip.GetContent` 给的 clip 归下载 handler 所有，`using` 一结束 request 就被销毁，Unity 没承诺 clip 还活着。`CopyClip`（`:79-89`）按 `samples × channels` 拷 float 样本另建 `AudioClip`（名字带 `-owned`），拷不动（压缩格式）才退回原件。用 `file://` 小 WAV 走真 `DownloadHandlerAudioClip` 的 PlayMode 用例 `TtsTransportTests.TheClipHandedUpIsAnOwnedCopyThatOutlivesTheRequest` 钉住这条。
+- **字幕按句推进**：`TtsSentences.Split` 按 `。！？.!?` 切句，单句上限 `MaxSentenceChars = 200`（`TtsSentences.cs:18`），硬切时走 `SafeCut`：切点落在代理对中间就把整个字符留给下一句（emoji 不会被劈成两个乱码），纯标点片段丢掉；一句一个 `durationMs`，最多 `MaxSentences = 40` 句（`ReplySpeaker.cs:26`），面板只留最近 `MaxSubtitleLines = 6` 句（`:35`），更早的折成首行「…」（`:255`）。
+- **失败一律降级**：任何非 2xx（含 400）都 `TtsReply.Unavailable` → `Degrade`（`UnityWebRequestTtsTransport.cs:163-165`、`ReplySpeaker.cs:170-174`），文案 `ReplySpeaker.FallbackCopy = "语音暂时不可用，先只看字幕。"`（`:29`），字幕照常显示；错误不会伪装成正常结束。
+- **打断**：开新一轮先 `Stop()`（`ReplySpeaker.cs:97`），连接断开时 `ConversationController.OnClientFailed` 也 `Stop()`（`Conversation/ConversationController.cs:245-263`）——停声排在 `Panel == null` 早退之前，面板没接上也不许继续出声。`Stop()` 同时清掉「这一轮说过了」的记号（`ReplySpeaker.cs:127-129`），停播后同一段文本能重新播；重复 frame 的去重只发生在 `Speak` 入口那一次判断。`_generation` 让还在飞的协程在检查点退出，已交付但被丢弃的 `AudioClip` 直接 `Destroy`（`:184-198`、`:327-332`，`ClipsDestroyed` 计数），不泄漏。
+- **计数**：EditMode **75/75/0/0**、PlayMode **203/202/0/1**（跳过 `BridgeSmokeTests.UiSceneShot`）。比交付时各多 3 条 / 2 条，是评审之后补的：切句不劈代理对、`CopyClip` 样本一致、`-token -nobody` 不把开关当令牌（EditMode）；真 `DownloadHandlerAudioClip` 交出来的是自有拷贝、`Stop` 后同一轮同一句能重播（PlayMode）。
+
+- **锚点图，不用 NavMesh**：`Scripts/Room/EdgeTable.cs` 是 **9 个节点 / 10 条无向边 / 总长 16.4054 m**（日志按 F3 打 `16.405 m`）。节点 A1–A5 取自 `Anchors/anchors.json`；座节点 S1（长凳，站立点 +0.70 m）、S2（床，站立点 −1.30 m，只连 A1/A4，即只能从床脚下来）；另两个手写拐点 W1/W2 专门绕开床（`EdgeTable.cs:101-124`）。最窄净空 **+0.04 m**（A1–S2、S2–A4 贴床南侧），`Path(from, to)` 走 Dijkstra。
+- **走位参数**（`Scripts/Avatar/AvatarWalker.cs`）：`Speed = 1.1` m/s、`TurnRate = 180`°/s，到位吸附属 `ArriveAngle = 5°`（`:36`）、髋位误差 **≤0.05 m**（`.superpowers/sdd/unity-p7-voice-walking-body/task-2-report.md`）；`Phase` 为 Thinking/Answered 时 `GoTo` 拒绝——说话不走动（`:489-493`）；单帧步长上限 `MaxUpdateStep = 0.1` s，卡一帧也不会瞬移（`:39`）。
+- **玩家挡路只停下、不推人**：`OverlapCapsuleNonAlloc` 只把 `CharacterController` 当障碍（`:504-513`）。
+- **半路停走是诚实的**：`StopQuietly` 把 `At` 清空并记 `_betweenNodes`（`:383-394`），恢复后不去猜最近的节点，要 `ResnapToNearestNode()` 显式认路（`:408-421`）——宁可说「不知道」，也不把没扫掠过的直线当成走过的路。
+- **座位姿势**：S1 用椅表（髋 = 座面 + 0.14），S2 走 `AvatarActor.SitOnBed` + `AvatarPose.BedSitting`（髋 = 床面 + 0.14 m；实测 1.046 m，椅坐 1.056 m）。**不读 `actor.SeatId`**——它只在 `Spawn` 写一次，床坐之后仍写着 `"S1"`；认座靠 `SeatUnderneath()` 用 root 的 (x,z) 与各座比距离，`SeatWindow = 0.05` m 内才认（`:44-49`、`:463-487`；`NodeWindow = 0.5` m 管的是节点）。
+- **站/坐共用同一根胶囊**：`AvatarActor.FitBody` 站立不再删胶囊，坐/站切换不换实例。
+- **三条已知限制**：① **没有生产调用方**——`RoomBootstrap.cs:147-155` 只创建并绑定 Walker，全仓 `GoTo(` 只出现在 `AvatarWalkTests`；② `ActionDirector` 的 sit-together 与 Cancel 直接 `SitOnBed`/`SitAt`，**不同步 walker**（`ActionDirector.cs:209`、`:308`），将来接动作要先补编排与测试；③ **没有走路动画**——只有根位移 + 原地 idle，腿不会迈。
+
+- **玩家身体**（`Scripts/PlayerBody.cs`）：把 `Assets/_Local/avatars/Me.vrm` 的实例挂在玩家根上（不是头、不是相机），缩放到 `TargetHeight = 1.70 m`（`:42`，scale 0.839），脚底贴合玩家脚下（`:166-176`）；蹲/坐按眼睛高度整体下移（`:150`）。跟随误差 **≤0.02 m / 1°**（`PlayerBodyTests.cs:123`、`:145`、`:150`）。
+- **相机臂 < `NearDistance = 1.2` m 时藏头**（`:35`、`:209`），≥1.2 m 保持第三人称可见——留着只会让屏幕被后脑勺填满。
+- **模型自带 collider 全剥掉**（`:121-122`、`:227-231`；当前资产实测 0 个 spring-bone collider，规则留作保险），玩家移动权威仍是 `CharacterController`。
+- `-nobody 1` 关掉身体（`BootArgs.cs:42` 的 `NoBody`、预扫 `:72-87`；`-token` 的值若像开关则按没给令牌处理 `:126-132`）；找不到模型时打一条 `[body] 找不到 …` 后优雅降级（`PlayerBody.cs:105-108`），不抛异常。
+- **证据**：`apps/unity/Shots/p7-body-front.png`（A1 站立）、`p7-mirror.png`（镜前机位），1280×720；机位参数见 `.superpowers/sdd/unity-p7-voice-walking-body/task-3-report.md` §4。
+- **四条已知限制**：① **打包版没有身体**——`LoadPrefab` 只有 `#if UNITY_EDITOR` 分支（`:238-240`），非编辑器返回 null 并 `Debug.LogError`；要上包必须把 `Me.vrm` 烘进场景（`Prefab` 字段）或放进 `Resources`。② 蹲/坐是**整体下沉**，脚会入地；站立只有 `AvatarPose.ArmsDown` 静态姿势，没有 idle 微动。③ 镜子**没有平面反射**——那张图是「站在镜子前」的机位，不是镜中倒影。④ 头部识别是启发式（Renderer 名含 face/hair，或包围盒底 ≥ 62% 身高，`:45`、`:184`），换模型会先红而不是静默错。
+- **红证（可复核）**：编译红 `apps/unity/Logs/p7-task3-red-1.log`（CS0246 `PlayerBody` 找不到 + CLI exit 6）；身体单点变异 195/193/1/1、唯一失败 `TheHeadIsHiddenWhenTheCameraComesClose`（计数与用例名在 `.superpowers/sdd/unity-p7-voice-walking-body/task-3-report.md` §「红证」；`Logs/p7-task3-red-mutant-1.log` 只留了 CLI 的 `exit 8`，变异 XML 未留档——见下条）；走位两个变异 `p7-task2-fix2b-mut-i1.xml`（201/198/2/1，`ABedSitBySomeoneElseIsRecognisedAsTheBed`、`ASeatSheIsNotActuallyOnLeavesHerOffTheGraph`）与 `p7-task2-fix2b-mut-i2.xml`（201/199/1/1，`ADisabledMidWalkComesBackOffTheGraph`：`Expected: null` / `But was: "A2"`）；语音变异红在 `.superpowers/sdd/unity-p7-voice-walking-body/task-1-report.md`（用例 `ReplySpeakerTests.ALongReplyIsAskedOneShortSentenceAtATimeAndTheSubtitleStaysBounded`，`:364`；`Logs/p7-task1-fix2-red-play-2.log` 同样只留了 CLI 退出码）。**只有 Task 2 的两个变异 XML 是真落盘的**，Task 1/Task 3 的红证只能追到报告文字——下次做变异先把 XML 另存。
+- **评审轮的变异红（这次 XML 都留了）**：① 去掉 `CopyClip`（`onOk(downloaded)`）→ PlayMode **203/201/1/1**，唯一失败 `TtsTransportTests.TheClipHandedUpIsAnOwnedCopyThatOutlivesTheRequest`（`Logs/p7-review-mut-clip.xml`）；② 去掉 `Stop()` 里的 `_hasSpoken = false` → PlayMode **203/201/2/1**，失败 `AStoppedLineCanBeSaidAgainInTheSameTurn`（等了 10 s 没再合成）+ 同轮 `VoiceSceneTests` 因失败用例留下的面板未清而连带红（`Logs/p7-review-mut-replay.xml`）；③ 硬切不避代理对 + 去掉令牌形似开关的守卫 + 直接 `onOk(downloaded)` → EditMode **75/73/2/0**，失败 `ALongSentenceIsNeverCutThroughTheMiddleOfOneCharacter`、`ATokenThatLooksLikeAFlagIsIgnoredInsteadOfBeingSent`（`Logs/p7-review-mut-edit.xml`）。还原后 EditMode 75/75/0/0、PlayMode 203/202/0/1。
+- **六门终跑**（评审修完之后重跑，`summary: 6/6 ok`，exit 0）：web 12.3 s / bridge 17.2 s / unity-edit 25.4 s / unity-play 58.7 s / smoke 61.8 s / player 6.2 s。`player` 门跑的是这一轮重编的 IL2CPP 包（`build/GameAssembly.dll` 37,611,520 B @ 12:34:02、`global-metadata.dat` 10,902,128 B @ 12:33:41；`Mas3D.exe` launcher 仍是 11-05 那份 667,136 B），即 `PlayerBody` 在打包版里打一条 `Debug.LogError` 后降级、没有把门弄红。同轮 `TestResults/EditMode.xml` = **75/75/0/0** @ 12:36:22、`TestResults/PlayMode.xml` = **203/202/0/1** @ 12:37:20（跳过 `BridgeSmokeTests.UiSceneShot`）。Task 2 的两个变异 XML 仍在 `Logs/p7-task2-fix2b-mut-i1.xml` / `-i2.xml`，评审轮三个在 `Logs/p7-review-mut-*.xml` 供复核。
+
 ## 6. 四件动作的验收判据（可测，不靠肉眼）
 
 | 动作 | 判据 |
@@ -288,6 +316,7 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - **P4 四件动作**：按第 6 节逐件做到判据。
 - **P5 回归与归档**：smoke 覆盖到四件动作（含第 6 节判据）；全绿后把 **web 版降级归档**（单开一步，不混在功能提交里）。
 - **P6 打包**：IL2CPP 出包，双击可跑；桥接与 AstrBot 的启动顺序、失败提示。
+- **P7 语音与身体**：TTS 逐句播放 + 字幕；锚点间走位（边表 + 胶囊扫掠）；玩家身体 Me.vrm（编辑器/PlayMode/截图）。明细见 §5.23。
 
 ## 8. 已由 YG 拍板的两件事（2026-11-01）
 

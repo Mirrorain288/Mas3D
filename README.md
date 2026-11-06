@@ -43,6 +43,8 @@ powershell -ExecutionPolicy Bypass -File tools/check.ps1          # 六步全回
 
 两条命令都会起 Unity 批处理：跑前关掉编辑器（单实例，撞锁只会 FAIL）。`check.ps1` 一轮约 9–12 分钟，日常改动用 `tools/unity.ps1 smoke`（约 3 分钟），分工见 spec §5.21。
 
+语音与身体：回复会逐句合成、逐句出字幕；桥接或 GPT-SoVITS 不可用时降级成「语音暂时不可用，先只看字幕。」，字幕照常。想不看玩家身体（截图、对照）用 `build\Mas3D.exe -nobody 1`。玩家身体（`Assets/_Local/avatars/Me.vrm`）**只在编辑器里加载**，打包版没有身体——要上包得先把模型烘进场景。细节见 spec §5.23。
+
 ### web 版（已归档，见 `apps/web/ARCHIVE.md`）
 
 ```powershell
