@@ -55,6 +55,12 @@ namespace Mas3D
         Vector3 _planar;
         float _vertical;
 
+        /// <summary>
+        /// 上一次坐下的那张座面（topY）。Cancel / RestoreEntering 只给姿态、不给座面，靠它把
+        /// 「坐在床沿」还原成坐在床沿，而不是空中坐；没坐过就是 0，Sitting 仍旧用固定 1.10。
+        /// </summary>
+        float _seatTopY;
+
         public Transform Head { get; private set; }
         public PlayerPosture Posture { get; private set; } = PlayerPosture.Standing;
         public Vector3 PlanarVelocity => _planar;
@@ -131,14 +137,18 @@ namespace Mas3D
         /// <paramref name="seatTopY"/> is the surface the player sits on, and only Sitting reads it:
         /// the bench (topY 0.604) leaves the plan's fixed 1.10 eye, while the bed (topY 0.906) has to
         /// put the eye 0.50 m above the mattress at 1.406 or the player sits with their knees in it.
-        /// Zero means "no surface named" and keeps the fixed 1.10.
+        /// Zero means "no surface named": the last named surface is reused, and only a player who
+        /// never sat on one falls back to the fixed 1.10. ActionDirector.Cancel and RestoreEntering
+        /// restore the posture without the surface, so "zero means 1.10" would drop the eye 0.306 m
+        /// into the mattress every time an action ends on the bed.
         /// </para>
         /// </summary>
         public void SetPosture(PlayerPosture posture, float seatTopY = 0f)
         {
             Posture = posture;
+            if (seatTopY > 0f) _seatTopY = seatTopY;   // 记住座面：还原只给姿态时还要用它
             var (eye, capsuleHeight, capsuleCentre) = Metrics(posture);
-            if (posture == PlayerPosture.Sitting && seatTopY > 0f) eye = seatTopY + 0.50f;
+            if (posture == PlayerPosture.Sitting && _seatTopY > 0f) eye = _seatTopY + 0.50f;
             EyeHeight = eye;
             CapsuleHeight = capsuleHeight;
 

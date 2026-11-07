@@ -56,6 +56,13 @@ namespace Mas3D
         /// </summary>
         public InputModes Modes;
 
+        /// <summary>
+        /// 数字键 1–5 找动作、C/Z/X 摆姿态。和 Modes 一样由 Boot 建、Boot 接线：场景里不预先摆，
+        /// 每个调用 Boot 的入口（含 CliPlayer 与自检）都自动拿到。它只做翻译，进不进得去动作
+        /// 由 <see cref="ActionDirector.TryEnterAction"/> 决定。
+        /// </summary>
+        public ActionHotkeys Hotkeys;
+
         // The imported floor sits at y = 0.04; spawning exactly on it leaves the capsule
         // penetrating, and a penetrating CharacterController never reports itself grounded.
         public const float SpawnLift = 0.10f;
@@ -186,6 +193,17 @@ namespace Mas3D
                 Modes = modesGo.AddComponent<InputModes>();
             }
             Modes.Bind(Player, dialoguePanel);   // Bind 同时把 Panel/Modes 交给玩家：焦点在框里、Esc 锁死时不走路
+
+            // 热键挂在 Modes 那同一个「Input」物体上：同一条键盘门（演出中 ActionDirector 会关掉
+            // Player.KeyboardInput），同一个生命周期（Main 卸载就一起消失），也就没有第二份
+            // 「谁能按键」的判断。
+            if (Hotkeys == null)
+            {
+                var inputGo = Modes.gameObject;
+                Hotkeys = inputGo.GetComponent<ActionHotkeys>();
+                if (Hotkeys == null) Hotkeys = inputGo.AddComponent<ActionHotkeys>();
+            }
+            Hotkeys.Bind(Actions, Player, dialoguePanel, Anchors);
 
             Debug.Log($"[room] colliders={ColliderCount} spawn={(anchor != null ? anchor.id : "none")} at={(anchor != null ? anchor.x.ToString("F2") + "," + anchor.z.ToString("F2") : "-")}");
 
