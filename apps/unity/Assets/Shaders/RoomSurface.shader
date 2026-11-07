@@ -110,6 +110,29 @@ Shader "Mas3D/RoomSurface"
             }
             ENDHLSL
         }
+
+        // 房间几何体只在上面那个 forward pass 里采样阴影，自己却从来不会写进阴影贴图：
+        // 没有 ShadowCaster pass 时，Unity 找不到投影变体，家具再高的 shadowCastingMode 也是空转，
+        // 于是地板上只有玩家身体（MToon 自带 ShadowCaster）的影子。补上这一段，家具才真的落影。
+        // 结构件（墙/地板/窗/门/镜）的 shadowCastingMode 在 RoomDress.ApplyShadowCasting 里关掉：
+        // 月光是从窗外「穿墙」照进来的既有观感，让外墙参与投影会把整间屋压黑。
+        Pass
+        {
+            Name "ShadowCaster"
+            Tags { "LightMode" = "ShadowCaster" }
+            ZWrite On
+            ZTest LEqual
+            ColorMask 0
+            Cull [_Cull]
+            HLSLPROGRAM
+            #pragma vertex ShadowPassVertex
+            #pragma fragment ShadowPassFragment
+            #pragma target 3.0
+            // 点光/聚光的投影要按顶点算光方向，平行光用 _LightDirection；URP 用这个关键字分流。
+            #pragma multi_compile_vertex _ _CASTING_PUNCTUAL_LIGHT_SHADOW
+            #include "Packages/com.unity.render-pipelines.universal/Shaders/ShadowCasterPass.hlsl"
+            ENDHLSL
+        }
     }
     FallBack Off
 }

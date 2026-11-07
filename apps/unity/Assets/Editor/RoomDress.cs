@@ -23,6 +23,27 @@ namespace Mas3D.Editor
         public const string FloorMesh = "Mesh_0140out";
         public const string WallMesh = "Mesh_0115out";
 
+        // 结构件不投影：月光是「从窗户照进来」的关键光，但它是穿过外墙打进来的（房间没有真窗洞），
+        // 一旦让墙/地板/窗/门/镜参与投影，外面的平行光会被外壳整个挡住，屋里只剩台灯与顶光。
+        // 所以投影只留给家具：床、长凳、书桌、墙桌、抽屉、搁板这些真会在地板上留影子的小件。
+        public const string WindowMesh = "Mesh_0106out";
+        public const string DoorMesh = "Mesh_0009out";
+        public const string MirrorMesh = "Mesh_0014out";
+        public const string WindowCasingMesh = "Mesh_0122out";
+        public const string FlatCeilingName = "flat-ceiling";
+
+        static readonly HashSet<string> NoCastMeshes = new HashSet<string>
+        {
+            WallMesh,
+            RoofMesh,
+            FloorMesh,
+            WindowMesh,
+            DoorMesh,
+            MirrorMesh,
+            WindowCasingMesh,
+            FlatCeilingName,
+        };
+
         /// <summary>One ceiling tile is about 0.75 m, matching the density of the old roof grid.</summary>
         public const float CeilingTileM = 0.75f;
 
@@ -106,6 +127,8 @@ namespace Mas3D.Editor
             public int keptTriangles;
             public GameObject flatCeiling;
             public List<Material> materials;
+            /// <summary>投影打开的房间 renderer 数（结构件是 0，见 ApplyShadowCasting）。</summary>
+            public int castingRenderers;
         }
 
         static string PbrPath(string name)
@@ -396,13 +419,49 @@ namespace Mas3D.Editor
             }
 
             result.flatCeiling = BuildFlatCeiling(room, ceiling, bounds, result.eaveY);
+            result.castingRenderers = ApplyShadowCasting(room);
 
             if (addLights) CreateLights(room, bounds, result.eaveY, tuning);
 
             Debug.Log($"[dress] painted={result.painted} roof triangles removed={result.strippedTriangles}" +
-                      $" kept={result.keptTriangles} eaveY={result.eaveY:F2}" +
+                      $" kept={result.keptTriangles} casting={result.castingRenderers} eaveY={result.eaveY:F2}" +
                       $" ceiling={(result.flatCeiling == null ? "none" : result.flatCeiling.transform.position.ToString("F2"))}");
             return result;
+        }
+
+        /// <summary>
+        /// 给房间几何体分档投影：家具 On、结构件 Off。RoomSurface 在 2026-11-07 之前没有
+        /// ShadowCaster pass，所有 renderer 的 casting 都是空转；pass 一补上，默认全 On 会让外墙
+        /// 把月光整个挡在室外，所以必须同时分档。返回打开投影的 renderer 数，供测试与日志核对。
+        /// </summary>
+        public static int ApplyShadowCasting(GameObject room)
+        {
+            var casting = 0;
+            var blocked = 0;
+            foreach (var renderer in room.GetComponentsInChildren<Renderer>(true))
+            {
+                // 判据只有 CastsShadow 一份：烤炉与测试都走它，免得两边各抄一张表（评审 Minor 2）。
+                var structural = !CastsShadow(renderer.gameObject.name);
+                renderer.shadowCastingMode = structural
+                    ? UnityEngine.Rendering.ShadowCastingMode.Off
+                    : UnityEngine.Rendering.ShadowCastingMode.On;
+                // 地板要接收家具的影子；其余件一起打开，免得某块墙在月光下像贴纸。
+                renderer.receiveShadows = true;
+                if (structural) blocked++;
+                else casting++;
+            }
+
+            Debug.Log($"[dress] shadow casting: furniture={casting} structural={blocked}");
+            return casting;
+        }
+
+        /// <summary>
+        /// 某个房间 renderer 该不该投影——烤炉与测试共用的唯一判据。
+        /// 参数是 renderer 的 GameObject 名（glTFast 直接用 Blender 的 mesh 名命名，吊顶则是我建的 "flat-ceiling"）。
+        /// </summary>
+        public static bool CastsShadow(string objectName)
+        {
+            return !NoCastMeshes.Contains(objectName);
         }
 
         /// <summary>

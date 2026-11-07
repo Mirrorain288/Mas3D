@@ -1,4 +1,5 @@
 using System.Linq;
+using Mas3D.Editor;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -18,13 +19,44 @@ namespace Mas3D.Tests.EditMode
         const string ScenePath = "Assets/Scenes/Main.unity";
 
         Light[] _lights;
+        UnityEngine.SceneManagement.Scene _scene;
         float _eave;
+
+        /// <summary>
+        /// 家具：真的该在地板上留影子的小件。床、墙桌（衣柜）、书桌、抽屉、床尾长凳。
+        /// 这些名字只用来点名验收；「该不该投影」只有一份判据 —— RoomDress.CastsShadow。
+        /// </summary>
+        static readonly string[] FurnitureMeshes =
+        {
+            "Mesh_0121out",
+            "Mesh_0025out",
+            "Mesh_0146out",
+            "Mesh_0138out",
+            "Mesh_0001out",
+        };
+
+        /// <summary>
+        /// 结构件：墙、屋顶（含踢脚）、地板、窗、门、镜、窗套、吊顶。它们不投影——月光本来就是
+        /// 穿墙照进来的，让外壳参与投影会把整间屋压黑。名字直接取 RoomDress 的常量，不再抄一份字符串。
+        /// </summary>
+        static readonly string[] ShellMeshes =
+        {
+            RoomDress.WallMesh,
+            RoomDress.RoofMesh,
+            RoomDress.FloorMesh,
+            RoomDress.WindowMesh,
+            RoomDress.DoorMesh,
+            RoomDress.MirrorMesh,
+            RoomDress.WindowCasingMesh,
+            RoomDress.FlatCeilingName,
+        };
 
         [OneTimeSetUp]
         public void OpenThePlayableScene()
         {
             var scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Additive);
             Assert.IsTrue(scene.IsValid(), "打不开 " + ScenePath);
+            _scene = scene;
             _lights = Object.FindObjectsByType<Light>(FindObjectsSortMode.None)
                 .Where(l => l.gameObject.scene == scene)
                 .ToArray();
@@ -115,6 +147,46 @@ namespace Mas3D.Tests.EditMode
         }
 
         [Test]
+        public void TheMoonCastsShadowsAtFullStrength()
+        {
+            var moon = Named(_lights, "moon");
+            Assert.IsNotNull(moon, "场景里没有 moon");
+            Assert.AreEqual(LightType.Directional, moon.type,
+                "月光必须是平行光：点光/聚光的影子会随相机位置变形，家具的影子就成了两套");
+            Assert.AreNotEqual(LightShadows.None, moon.shadows,
+                "月光不投影，家具只能靠台灯那点近场影子，地板就是一块平底");
+            Assert.GreaterOrEqual(moon.shadowStrength, 0.7f,
+                "投影强度低于 0.7，家具的影子在地板上只剩一层灰雾，看不出落地");
+        }
+
+        [Test]
+        public void TheFurnitureCastsShadowsAndTheShellDoesNot()
+        {
+            var room = Object.FindObjectsByType<MeshRenderer>(FindObjectsSortMode.None)
+                .Where(r => r.gameObject.scene == _scene)
+                .ToArray();
+
+            foreach (var name in FurnitureMeshes)
+            {
+                // 规则只有 RoomDress.CastsShadow 一份：这里断的是「规则说该投」且「场景里真的投了」。
+                Assert.IsTrue(RoomDress.CastsShadow(name), name + " 被 RoomDress 判成不投影");
+                var renderer = room.FirstOrDefault(r => r.gameObject.name == name);
+                Assert.IsNotNull(renderer, name + " 不在场景里，这条用例就失去意义");
+                Assert.AreEqual(ShadowCastingMode.On, renderer.shadowCastingMode,
+                    name + " 不投影：这就是「家具的影子只在玩家身上」的根因之一");
+            }
+
+            foreach (var name in ShellMeshes)
+            {
+                Assert.IsFalse(RoomDress.CastsShadow(name), name + " 被 RoomDress 判成要投影");
+                var renderer = room.FirstOrDefault(r => r.gameObject.name == name);
+                Assert.IsNotNull(renderer, name + " 不在场景里，这条用例就失去意义");
+                Assert.AreEqual(ShadowCastingMode.Off, renderer.shadowCastingMode,
+                    name + " 是外壳，投影会把穿墙而来的月光整个挡在室外");
+            }
+        }
+
+        [Test]
         public void TheRoomShaderActuallySamplesTheShadowMap()
         {
             // 只把灯的 shadows 设成 Soft、只把资产的开关打开，画面上的影子仍然是零：
@@ -127,6 +199,29 @@ namespace Mas3D.Tests.EditMode
             StringAssert.Contains("mainLight.shadowAttenuation", text, "主光乘漏了 shadowAttenuation");
             StringAssert.Contains("light.shadowAttenuation", text, "附加光乘漏了 shadowAttenuation");
             StringAssert.Contains("_ADDITIONAL_LIGHT_SHADOWS", text, "附加光阴影变体没编译，台灯就不会投影");
+
+            // 采样阴影是「收到影子」，往外写影子要有自己的 ShadowCaster pass：
+            // 缺这一段时，家具的 shadowCastingMode 再高也不会进阴影贴图，2026-11-07 之前
+            // 地板上的影子全部来自玩家身体（MToon 自带 ShadowCaster），房间部件一个都没投。
+            // 只匹配代码行：解释这段 pass 的注释里也写着 ShadowCaster，Contains 会被注释喂饱——
+            // 整段 pass 删掉它也照样绿（评审 I2）。
+            Assert.IsTrue(HasCodeLine(text, "Name \"ShadowCaster\""),
+                "房间 shader 没有 ShadowCaster pass，家具不会写进阴影贴图");
+            Assert.IsTrue(HasCodeLine(text, "\"LightMode\" = \"ShadowCaster\""),
+                "ShadowCaster pass 没挂 LightMode 标签，URP 不会拿它写阴影贴图");
+            Assert.IsTrue(HasCodeLine(text, "ShadowCasterPass.hlsl"), "ShadowCaster pass 没接 URP 的投影实现");
+        }
+
+        /// <summary>text 里有没有这么一行代码：整行注释不算证据。</summary>
+        static bool HasCodeLine(string text, string needle)
+        {
+            foreach (var line in text.Split('\n'))
+            {
+                if (line.TrimStart().StartsWith("//")) continue;
+                if (line.Contains(needle)) return true;
+            }
+
+            return false;
         }
     }
 }

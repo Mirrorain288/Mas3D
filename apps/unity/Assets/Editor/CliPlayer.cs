@@ -125,6 +125,11 @@ namespace Mas3D.Editor
             // MToon 的明暗分界要跟着场景走：VRM 资产默认 shift=1/toony=1 会让 shade 段消失。
             var shaded = AvatarShading.Apply(actor.gameObject);
             Debug.Log("[player] avatar shading materials=" + shaded);
+            // 虹膜贴图换成重画过的那张：VRM 自带的是荧光黄绿（饱和度 0.98），夜景里像两粒 LED。
+            // 同样落在场景副本上，幂等——重复 BuildScene 不会再套一层。
+            var iris = AvatarEyes.LoadIris();
+            var eyes = AvatarEyes.Apply(actor.gameObject, iris);
+            Debug.Log("[player] iris materials=" + eyes + " texture=" + (iris != null ? iris.name : "missing"));
             var outlined = Mas3D.Rendering.AvatarOutlines.Apply(actor.gameObject, HasFlag("-outlineVerbose"));
             Debug.Log("[player] avatar outline materials=" + outlined);
             boot.Actor = actor;
@@ -331,6 +336,15 @@ namespace Mas3D.Editor
 
             // One view from the spawn anchor, then quarter turns so the framing and the obstacle
             // avoidance can both be judged.
+            // 批处理里没有 Update 循环：Cinemachine 的阻尼只跟着 ManualUpdate 前进。
+            // 先空转两帧把相机收敛到目标机位，否则第一张 play-01 拍的是「还在飞」的相机，
+            // 与后面同机位重拍的 no-shadow-01 构图差出几十个像素——配对守卫会先把它抓出来（C1 复查时命中 36%）。
+            rig.SetOrbit(86f, 14f);
+            brain.ManualUpdate();
+            camera.Render();
+            brain.ManualUpdate();
+            camera.Render();
+
             float[] yaws = { 0f, 90f, 180f, 270f };
             for (var i = 0; i < yaws.Length; i++)
             {
@@ -342,6 +356,64 @@ namespace Mas3D.Editor
                 WriteShot(target, file);
                 var eye = boot.Player != null && boot.Player.Head != null ? boot.Player.Head.position.ToString("F2") : "-";
                 Debug.Log(string.Format("[play] wrote {0} cam={1:F2} eye={2}", file, camera.transform.position, eye));
+            }
+
+            // `-hideplayer 1`：只拍房间。play-01 那对阴影图里，一整个玩家身体就站在灯下，
+            // 判据被它一个人撑着——家具到底有没有在地板上落影，只能把身体藏起来单独看一张。
+            // 只藏玩家身体的 renderer（连影子一起退出渲染），Monika 不是玩家，保持可见。
+            //
+            // 藏起来必须还回来：同一趟 capture 后面还有 no-shadow-01、avatar-seated、foot/face/eyes
+            // 要带着玩家拍。漏一次还原，那几张就全成了空场景，play-01 那对更会变成「有玩家 vs 没玩家」，
+            // 判据从此恒绿（评审 C1：no-shadow-01 与 room-noshadow-01 一度逐字节相同）。
+            var hidePlayer = HasFlag("-hideplayer");
+            var hiddenBody = new List<Renderer>();
+
+            void HidePlayer()
+            {
+                var body = boot.Player != null ? boot.Player.GetComponent<PlayerBody>() : null;
+                if (body == null || body.Avatar == null)
+                {
+                    // 找不到身体还继续拍，room 那对就会退化成「两张都带玩家」而照样 PASS ——
+                    // 判据在降级场景下盖章比直接失败更糟，所以这里硬退出。
+                    Debug.LogError("[play] -hideplayer 找不到玩家身体，room 对照图会失去意义");
+                    EditorApplication.Exit(1);
+                    return;
+                }
+
+                foreach (var renderer in body.Avatar.GetComponentsInChildren<Renderer>(true))
+                {
+                    if (!renderer.enabled) continue;
+                    renderer.enabled = false;
+                    hiddenBody.Add(renderer);
+                }
+            }
+
+            void ShowPlayer()
+            {
+                var restored = 0;
+                foreach (var renderer in hiddenBody)
+                {
+                    if (renderer == null) continue;
+                    renderer.enabled = true;
+                    restored++;
+                }
+
+                // 日志里留一行「还回来了几个」：后面任何一张图少了玩家，翻 capture 日志就能看出是哪一步开始丢的。
+                if (restored > 0) Debug.Log("[play] player body restored (" + restored + " renderers)");
+                hiddenBody.Clear();
+            }
+
+            // 房间单独一张：和 play-01 同机位、同灯，只把玩家身体拿掉，拍完立刻还原。
+            if (hidePlayer)
+            {
+                HidePlayer();
+                rig.SetOrbit(86f, 14f);
+                brain.ManualUpdate();
+                camera.Render();
+                var roomShot = Path.Combine(shotDir, "room-shadow-01.png");
+                WriteShot(target, roomShot);
+                Debug.Log("[play] wrote " + roomShot + " (player hidden, " + hiddenBody.Count + " renderers)");
+                ShowPlayer();
             }
 
             // `-shadows 0`：把两盏会投影的灯关掉阴影，再用同一个机位渲一张 play-01 的对照图。
@@ -356,12 +428,27 @@ namespace Mas3D.Editor
                 // covers far more pixels there.
                 foreach (var yaw in new[] { 0f, 180f })
                 {
+                    // 同上：换机位后要收敛两帧，配对图才真正同构图。
                     rig.SetOrbit(86f + yaw, 14f);
+                    brain.ManualUpdate();
+                    camera.Render();
                     brain.ManualUpdate();
                     camera.Render();
                     var plain = Path.Combine(shotDir, "no-shadow-0" + (yaw == 0f ? 1 : 3) + ".png");
                     WriteShot(target, plain);
                     Debug.Log("[play] wrote " + plain + " (shadows off)");
+
+                    // 房间那一对必须和 no-shadow-01 同机位、同灯，所以顺序只能是：
+                    // 先拍带玩家的 no-shadow-01（上面那张），再藏起来拍 room-noshadow-01，拍完立刻还原。
+                    if (hidePlayer && yaw == 0f)
+                    {
+                        HidePlayer();
+                        camera.Render();
+                        var roomPlain = Path.Combine(shotDir, "room-noshadow-01.png");
+                        WriteShot(target, roomPlain);
+                        Debug.Log("[play] wrote " + roomPlain + " (player hidden, shadows off)");
+                        ShowPlayer();
+                    }
                 }
             }
 
@@ -430,6 +517,28 @@ namespace Mas3D.Editor
                 var faceFile = Path.Combine(shotDir, "face.png");
                 WriteShot(target, faceFile);
                 Debug.Log("[play] wrote " + faceFile + " fov=30");
+
+                // 眼部特写：虹膜判据（饱和度、色相、高光簇、外圈暗带）必须在出图上量。
+                // face.png 里虹膜只有 25 px 宽，外圈那两三个像素早被抗锯齿抹平，量出来没有意义；
+                // 所以再拍一张 0.30 m、fov 18 的特写，机位对准两只眼骨的中点，两只虹膜各约 90 px。
+                var leftEye = boot.Actor.Rig.Bone(HumanBodyBones.LeftEye);
+                var rightEye = boot.Actor.Rig.Bone(HumanBodyBones.RightEye);
+                if (leftEye != null && rightEye != null)
+                {
+                    var eyesMid = (leftEye.position + rightEye.position) * 0.5f;
+                    var eyesPosition = eyesMid + facing * 0.30f + Vector3.up * 0.004f;
+                    camera.fieldOfView = 18f;
+                    camera.transform.position = eyesPosition;
+                    camera.transform.rotation = Quaternion.LookRotation(eyesMid - eyesPosition, Vector3.up);
+                    camera.Render();
+                    var eyesFile = Path.Combine(shotDir, "eyes.png");
+                    WriteShot(target, eyesFile);
+                    Debug.Log(string.Format("[play] wrote {0} fov=18 eye={1} look={2}", eyesFile, eyesPosition.ToString("F3"), eyesMid.ToString("F3")));
+                }
+                else
+                {
+                    Debug.LogWarning("[play] 找不到左右眼骨，跳过 eyes.png");
+                }
 
                 // 调色到底有没有进渲染：VolumeManager 的栈要等第一次 Render 之后才有内容，
                 // 所以放在这里读。栈里的值和 profile 里的值不一致，说明 Volume 没被相机捞进去。
