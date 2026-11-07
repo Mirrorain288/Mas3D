@@ -127,22 +127,25 @@ powershell -ExecutionPolicy Bypass -File tools/check.ps1
 powershell -ExecutionPolicy Bypass -File tools\look-shoot.ps1
 ```
 
-它按顺序做三件事，产出落在 `.superpowers/look/<日期>/`：
-
-1. `unity.ps1 player` 重建可玩场景（材质、灯、描边的数值在这一步写进 `Main.unity`）；
-2. `unity.ps1 capture -noShadows 1` 出五张交付图（`play-01..04`、`avatar-seated`）加两张关阴影的底片（`no-shadow-01`、`no-shadow-03`）；
-3. 跑 `look-compare.mjs`（脸颊 B/R、脸峰值、房间对比度、描边像素、脚下极差）与 `shadow-diff.mjs`（有/无阴影的像素差），退出码 = 失败项数。
+1. `unity.ps1 player` 重建可玩场景（材质、灯、描边、眼睛、家具 casting 的数值在这一步写进 `Main.unity`）；
+2. `unity.ps1 capture -noShadows 1 -hideplayer 1` 出交付图（`play-01..04`、`avatar-seated`、`face`、`eyes`、`foot-01..08`）加两对底片：`no-shadow-01/03`（带玩家）与 `room-shadow-01`、`room-noshadow-01`（同机位隐藏玩家，只留房间自己的影子）；
+3. 跑 `look-compare.mjs`（十项：脸颊 B/R、脸峰值、房间对比度、描边像素、脚下亮度比，加虹膜饱和度/色相/高光/外圈暗带）与 `shadow-diff.mjs`（两对图的下半幅阴影差 + 配对守卫），退出码 = 失败项数。
 
 单独跑其中一件：
 
 ```
-node tools/look-compare.mjs --mine apps/unity/Shots --ref docs/superpowers/specs/assets/2026-11-06-reference.png --report .superpowers/look/2026-11-06/metrics.json
-node tools/shadow-diff.mjs apps/unity/Shots/play-01.png apps/unity/Shots/no-shadow-01.png
+node tools/look-compare.mjs --mine apps/unity/Shots --ref docs/superpowers/specs/assets/2026-11-06-reference.png --report .superpowers/look/2026-11-07/metrics.json
+node tools/shadow-diff.mjs --min-lower 0.03 --min-peak 0 apps/unity/Shots/play-01.png apps/unity/Shots/no-shadow-01.png
+node tools/shadow-diff.mjs --min-lower=0.02 --min-peak 25 apps/unity/Shots/room-shadow-01.png apps/unity/Shots/room-noshadow-01.png
 ```
+
+`shadow-diff.mjs` 除了「变暗像素占比」，还查「参照里**变亮** ≥2% 的像素占比」（上限 0.5%）——阴影只会拿光不会给光，亮回去就说明两张图不是同一个场景（C1 那次 `no-shadow-01` 与 `room-noshadow-01` 逐字节相同，判定因此恒绿）。`--min-lower` / `--min-peak` 支持空格与等号两种写法，缺值或非数值直接 exit 2，不静默回落。
+
+眼睛贴图不在仓库里（`apps/unity/Assets/_Local/avatars/eyes/iris.png` 被 gitignore），用 `node tools/eyes-recolor.mjs` 从 VRM 原图重生；改色相/亮度看它的 `PALETTE`。
 
 三条口径是量出来定的，改判据前先读 `docs/superpowers/plans/2026-11-06-rendering-alignment.md` 的「Task 6 实测偏差」：脸峰值取 99.5 分位（不是 max）、描边取暗带长度的 75 分位（不是 max）、阴影差的分母取下半幅（影子只能落在照得到直射光的地方）。脚下光斑不做像素门，改由 `RoomLightTests` 从灯光配置上钉。
 
-`look-compare.mjs` 依赖 `sharp`（仓库根 `node_modules` 已有）。`player` / `capture` 接受的额外开关会原样转发给编辑器，例如 `capture -noShadows 1`。
+`look-compare.mjs` 依赖 `sharp`（仓库根 `node_modules` 已有）。`player` / `capture` 接受的额外开关会原样转发给编辑器，例如 `capture -noShadows 1`、`capture -hideplayer 1`。
 
 ## 为什么天空盒不是 EXR
 

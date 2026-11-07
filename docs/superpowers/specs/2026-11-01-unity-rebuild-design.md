@@ -335,6 +335,17 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - **红证**：渲染侧 `RoomLightTests` 四条先全红再实现（`apps/unity/TestResults/EditMode.xml` 4 failed）；controls Task 3 编译红 `Logs/c3-task3-red-compile.log`（CS1061 `AxisInput`/`IntentYaw`）、行为红 `Logs/s1-task3-red.xml`（223/219/**3**/1：绕圈 Pivot 残差 0.64°、Wish 方向 (1,0) 应为 (0,−1)、AMouseLocked 残差 −120°）、Task 4 红 `Logs/c4-task4-red.log`（226/222/**3**/1：Pitch −10、Distance 0.9、NearDistance 1.2 不小于 1.2）；变异红 `Logs/c3-task3-mutant-2.xml`（去掉 Tick 里的 `Apply` → 绕圈残差符号翻转 1 次）、`Logs/c4-task4-mutant-1.xml`（EyeGap 0.05→0.45 → 相差 0.450 m）。
 - **两条已知限制**：① 变异「把 Pivot 挂回 head」**没被抓住**（223/222/0/1 全绿，`Logs/c3-task3-mutant-1.xml`）——转身后补写 `Apply` 已经把父节点转身造成的漂移抹平，结构本身在批处理里不可观察，用例真正钉住的是那行 `Apply`；② controls Task 4 的严格 TDD 不成立（FP 字段在 Task 3 的整文件重写里已落地，红证靠回退 0.9/减号造出），真实缺陷是首轮绿跑抓到的两条（灵敏度乘两遍、FP 肩位未归零 0.284 m）。
 
+### 5.25 眼睛与房间自身投影（2026-11-07 实测）
+
+- **眼睛**（`apps/unity/Assets/Scripts/Avatar/AvatarEyes.cs`）：VRM 原厂的虹膜是荧光黄绿 + 厚黑外圈，靠调 MToon 参数改不动（颜色由贴图决定），所以换贴图：`tools/eyes-recolor.mjs` 按「保结构换色」生成 `apps/unity/Assets/_Local/avatars/eyes/iris.png`（1024×512，被 gitignore，随时可再生）。**只换 `_MainTex` 画面一个像素都不变**——MToon 的暗部走 `_ShadeTex`/`_ShadeTexture`，两张必须一起换，这是本轮最大的坑（`EyeLookTests.TheIrisCopySwapsItsShadeTextureToo` 专门钉它）。写的是 `Object.Instantiate` 出来的场景副本，不动 VRM 资产本身，否则重新导入即丢。
+- 眼睛判据（`tools/look-compare.mjs` 的 eyes 段，取 `eyes.png` 眼骨特写）：虹膜饱和度 **0.976 → 0.552**（限 ≤0.62）、色相 **184.9 → 178.0**（140–185）、高光 **0 → 1190 px / 3.2%**（限 ≥8 px 且 ≤8%）、外圈暗带 **7.5 → 1.5 px**（限 ≤2 px）。高光质心必须落在虹膜内（按行填充的 `inside(x,y)`），否则房间一变亮就会把眼白算成高光、给出假绿。
+- **房间自身投影**：`apps/unity/Assets/Shaders/RoomSurface.shader` 以前只有 UniversalForward 一个 pass 且末尾 `FallBack Off`，**没有 `LightMode=ShadowCaster`** → 房间几何体从不写阴影贴图。forward 侧其实一直在采 `TransformWorldToShadowCoord` + `mainLight.shadowAttenuation`（§5.24 那条用例也一直绿），但贴图里没有房间的影子可采，地板上唯一的影子来自玩家（MToon 自带 ShadowCaster）。补 `ShadowCaster` pass（复用 URP 的 `ShadowCasterPass.hlsl`）+ `RoomDress.ApplyShadowCasting`：**结构件 8 件 Off、家具 26 件 On**（外壳投影会在室内造成 acne 与假遮挡），规则只有 `RoomDress.CastsShadow` 一份，用例两侧都先断规则再断场景值。
+- 阴影判据（`tools/shadow-diff.mjs`，两对图）：room 对（隐藏玩家）下半幅被压暗 ≥3% 的像素由 **0.25% → 19.50%**、最深 **20.8% → 45.5%**（判据 下半幅 ≥2.0% 且最深 ≥25%）；play 对（带玩家）**18.47%**、全画面 11.41%、最深 45.5%（判据 下半幅 ≥3.0%）。
+- **配对守卫（C1 那一课）**：判据靠两张图相减，两张就必须同机位、同场景。`-hideplayer` 关掉玩家后原本没有还原点，而 `look-shoot` 把 `-noShadows 1 -hideplayer 1` 一起传，结果 `no-shadow-01.png` 与 `room-noshadow-01.png` 一度**逐字节相同**（SHA256 相同）——那一对退化成「有玩家 vs 无玩家」，38.29% 全是玩家轮廓，判据从此恒绿。现在 `HidePlayer/ShowPlayer` 成对出现、只登记本来 enabled 的 renderer、写完立刻逐件还原；`shadow-diff` 另加「参照里**变亮** ≥2% 的像素占比」守卫（>0.5% 即 FAIL）：能抓住错机位（56.8%）与相机未收敛（36.5%），抓不住「只缺玩家」（1.65%）——那条靠两图哈希必须不同 + 代码审。找不到玩家身体时 `CliPlayer` 直接 `EditorApplication.Exit(1)`，不许在降级场景里盖章。
+- **批处理出图必须先预热相机**：`capture` 没有 Update 循环，Cinemachine 的阻尼只在 `ManualUpdate()` 时前进，`play-01` 曾带着未收敛的机位（同一像素 105 vs 82），相减后「亮回去」36.45% 全是假象。现在每次取景前推两帧。剩下的粗糙处记账：room 那张只推一次、帧数是魔法数字 2，应抽 `WaitForCamera` 或 `while (brain.IsBlending)`。
+- 计数与命令：EditMode **95/95/0/0**、PlayMode **225/224/0/1**（跳过 `BridgeSmokeTests.UiSceneShot`）；`tools/look-shoot.ps1` 一条命令跑完十项判据（六项画质 + 四项眼睛）+ 两对阴影，`exit` = 失败项数，本轮 `failed checks: 0`，产物 `.superpowers/look/2026-11-07/`。
+- **已知限制**：① 虹膜是贴图重绘，达不到参考立绘的手绘质感，只做到「冷绿、有高光、外圈不厚」；② 房间影子在斜角下的 acne 没有单独验（只验了正面与 room 机位）；③ `look-shoot.ps1` 没有接哈希断言，配对失效只能靠 shadow-diff 的变亮守卫兜。
+
 ## 6. 四件动作的验收判据（可测，不靠肉眼）
 
 | 动作 | 判据 |
@@ -356,6 +367,7 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - **P6 打包**：IL2CPP 出包，双击可跑；桥接与 AstrBot 的启动顺序、失败提示。
 - **P7 语音与身体**：TTS 逐句播放 + 字幕；锚点间走位（边表 + 胶囊扫掠）；玩家身体 Me.vrm（编辑器/PlayMode/截图）。明细见 §5.23。
 - **P8 观感与操作对齐**：管线归位（Linear + 全局 Volume + 删手写 ACES）、灯与阴影、MToon 明暗与描边、输入门与 IME 字符顺序、相机骨架与真第一人称，判据由 `tools/look-compare.mjs`/`shadow-diff.mjs` 数值化。明细见 §5.24。
+- **P9 眼睛与房间自身投影**：虹膜保结构换色（`_MainTex` 与 `_ShadeTex` 必须一起换）、`RoomSurface` 补 `ShadowCaster`、按结构/家具分档 casting；两对阴影图与四项眼睛判据并入 `tools/look-shoot.ps1` 一条命令。明细见 §5.25。
 
 ## 8. 已由 YG 拍板的两件事（2026-11-01）
 
