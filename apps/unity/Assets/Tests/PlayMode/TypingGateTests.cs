@@ -1,8 +1,10 @@
 using System.Collections;
+using System.Text.RegularExpressions;
 using Mas3D.UI;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
+using UnityEngine.UIElements;
 
 namespace Mas3D.Tests
 {
@@ -318,6 +320,134 @@ namespace Mas3D.Tests
                 UnityEngine.Object.DestroyImmediate(modesObject);
                 UnityEngine.Object.DestroyImmediate(player);
             }
+        }
+
+        // ---- 焦点修复（hotkeys Task 1）-----------------------------------------
+
+        /// <summary>
+        /// 面板根的 Escape 必须能失焦：不经过 InputModes，证明 UI Toolkit 这条路自己也能兜住。
+        /// 实机反馈是「Esc 退不出输入框」，而 InputModes 那条路只覆盖了外层 TextField 持焦点的情况；
+        /// 这一条把焦点留在面板内部，只看根节点上的 KeyDown 回调能不能把它清掉。
+        /// </summary>
+        [UnityTest]
+        public IEnumerator EscapeOnThePanelRootBlursWithoutTheInputModesComponent()
+        {
+            yield return Build();
+            _panel.Panel.FocusInput();
+            yield return null;
+            Assert.IsTrue(_panel.Panel.IsInputFocused, "前置条件：焦点在输入框里");
+
+            var root = _panel.Panel.Document.rootVisualElement;
+            using (var evt = KeyDownEvent.GetPooled(new Event { keyCode = KeyCode.Escape, character = '\0' }))
+            {
+                // 不手动写 evt.target：target 由 SendEvent 赋值，测试里直接改它是不可见的内部状态。
+                root.SendEvent(evt);
+            }
+
+            yield return null;
+            Assert.IsFalse(_panel.Panel.IsInputFocused, "面板收到 Escape 就必须失焦");
+            Assert.IsTrue(_motor.WantsKeyboard, "失焦当帧键盘就该回来");
+        }
+
+        /// <summary>
+        /// 焦点落在 TextField 的子树里时，Blur 也必须把它拿走。
+        /// 这正是 H1：真实输入时焦点在内层 TextElement，只 Blur 外层 TextField 可能什么都没清掉。
+        /// </summary>
+        [UnityTest]
+        public IEnumerator BlurInputTakesTheFocusAwayFromAChildOfTheField()
+        {
+            yield return Build();
+            var field = _panel.Panel.InputField;
+            Assert.IsNotNull(field, "面板必须把输入框暴露出来，否则这条用例无从下手");
+            var child = new VisualElement { focusable = true };
+            field.Add(child);
+            yield return null;
+            child.Focus();
+            yield return null;
+
+            if (!_panel.Panel.IsInputFocused)
+            {
+                child.RemoveFromHierarchy();
+                Assert.Ignore("这一版 TextField 不接受子元素焦点，本条不适用");
+            }
+
+            _panel.Panel.BlurInput();
+            yield return null;
+            Assert.IsFalse(_panel.Panel.IsInputFocused, "子元素持焦点时 BlurInput 也必须清干净");
+            Assert.IsNull(field.panel.focusController.focusedElement, "失焦后焦点控制器里不该还留着元素");
+            child.RemoveFromHierarchy();
+        }
+
+        /// <summary>
+        /// 焦点变化要留痕，理由可读：日志是「过一会又自己进框」的唯一证人。
+        /// 元素名脱敏成类型名（不许把玩家打的字写进日志）。
+        /// </summary>
+        [UnityTest]
+        public IEnumerator FocusChangesAreLoggedWithAReason()
+        {
+            yield return Build();
+            LogAssert.Expect(LogType.Log, new Regex(@"\[focus\] .* -> .* reason=focus"));
+            _panel.Panel.FocusInput();
+            yield return null;
+            // 显式给理由：BlurInput 的默认值已改成 unknown（M3），这条用例要验的是 escape 这条路的留痕。
+            LogAssert.Expect(LogType.Log, new Regex(@"\[focus\] .* -> .* reason=escape"));
+            _panel.Panel.BlurInput("escape");
+            yield return null;
+        }
+
+        /// <summary>
+        /// 第 1 条回归（评审 I1）：焦点被抢回之后再按一次 Esc，必须还能留下一行 ——
+        /// 「目标状态没变」不是不记的理由，那正是第二次失焦的唯一证据。
+        /// </summary>
+        [UnityTest]
+        public IEnumerator ASecondEscapeAfterTheFocusComesBackIsStillLogged()
+        {
+            yield return Build();
+            var panel = _panel.Panel;
+
+            LogAssert.Expect(LogType.Log, new Regex(@"\[focus\] .* -> .* reason=escape"));
+            panel.FocusInput();
+            yield return null;
+            panel.BlurInput("escape");   // 默认值已是 unknown（M3），这条用例验的是 Esc 这条路
+            yield return null;
+
+            // 没人按 E：外部（输入法、别的系统）把焦点抢回输入框。
+            // 先把 InputModes 关掉：这条用例只验「第二次失焦仍要留痕」，不许被 I2 的回流日志代劳。
+            _modes.enabled = false;
+            panel.InputField.Focus();
+            yield return null;
+            Assert.IsTrue(panel.IsInputFocused, "前置条件：焦点确实回到了输入框");
+
+            LogAssert.Expect(LogType.Log, new Regex(@"\[focus\] .* -> .* reason=escape"));
+            panel.BlurInput("escape");
+            yield return null;
+            Assert.IsFalse(panel.IsInputFocused, "第二次 Esc 之后焦点仍应不在输入框");
+        }
+
+        /// <summary>
+        /// 第 2 条回归（评审 I2）：没有任何按键，焦点自己回来了 —— 下一次 PollFocus 必须把它记成 reflow。
+        /// 用接缝调 PollFocus，不依赖真实 Update（批处理帧率不稳，也躲开关闸分支）。
+        /// </summary>
+        [UnityTest]
+        public IEnumerator AFocusThatComesBackOnItsOwnIsLoggedAsReflow()
+        {
+            yield return Build();
+            var panel = _panel.Panel;
+
+            panel.FocusInput();
+            yield return null;
+            panel.BlurInput();
+            yield return null;
+            Assert.IsFalse(panel.IsInputFocused, "前置条件：先真的失焦");
+
+            // 焦点被外部抢回：我们这边没有人按 E，也没有人调 FocusInput。
+            panel.InputField.Focus();
+            yield return null;
+            Assert.IsTrue(panel.IsInputFocused, "前置条件：焦点确实被抢回去了");
+
+            LogAssert.Expect(LogType.Log, new Regex(@"\[focus\] .* -> .* reason=reflow"));
+            _modes.PollFocus();
+            yield return null;
         }
     }
 }

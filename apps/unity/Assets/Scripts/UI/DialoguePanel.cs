@@ -42,6 +42,8 @@ namespace Mas3D.UI
         /// <summary>
         /// 焦点进出输入框（true = 刚聚焦）。<see cref="InputModes"/> 靠它解 Esc 锁：
         /// 锁只认这一个信号，别的路径（点外面、面板失活）都不该悄悄把键盘放开。
+        /// 注意：同一帧可能被抛两次（InputModes 的 Esc 与面板根上的 Escape 各触发一次 BlurInput），
+        /// 订阅者必须幂等 —— 重复收到同一个值不许产生第二次副作用。
         /// </summary>
         public event Action<bool> FocusChanged;
 
@@ -72,6 +74,11 @@ namespace Mas3D.UI
         // 不走 UI Toolkit 的 IMECompositionEvent（6000.6.7f1 里不是公开类型，引用直接编译不过），
         // 也不走反射读 textEdition.isComposing（实测该属性为 null，整段是死代码）。
         bool _composingManual;
+        // 焦点诊断（hotkeys Task 1）：_root 是注册 Escape 回调的那棵树，_escapeHooked 守幂等；
+        // _lastFocusLogged 记「上一次写进日志的目标状态」，回流检测（NoteFocusReflow）拿它当基准。
+        VisualElement _root;
+        bool _escapeHooked;
+        string _lastFocusLogged = "none";
         static Font _cjkFont;
         static bool _fontResolved;
         static bool _warnedMissingPanel;
@@ -182,6 +189,16 @@ namespace Mas3D.UI
             }
         }
 
+        /// <summary>输入框元素本身（测试与焦点诊断用，只读；不替代 InputText 这条写入口）。</summary>
+        public TextField InputField
+        {
+            get
+            {
+                EnsureBound();
+                return _input;
+            }
+        }
+
         /// <summary>
         /// 把焦点搬进输入框（玩家按 E，或 InputModes 判定该打字了）。
         /// 这里只做“聚焦”这一件事：光标落点归 Task 2 的唯一写入口，别在这里再写一份。
@@ -190,19 +207,121 @@ namespace Mas3D.UI
         {
             EnsureBound();
             if (_input == null) return;
+            var wasFocused = FocusName(CurrentFocused());
             _input.Focus();
+            LogFocus("focus", FocusName(_input), wasFocused);
             var handler = FocusChanged;
             if (handler != null) handler(true);
         }
 
-        /// <summary>把焦点从输入框拿走（Esc、点面板外面、面板收起来）。树没挂上时静默返回。</summary>
-        public void BlurInput()
+        /// <summary>
+        /// 把焦点从输入框拿走（Esc、点面板外面、面板收起来）。树没挂上时静默返回。
+        /// reason 只影响日志（escape / outside-click / escape-root），行为一条道。
+        /// 默认值故意取 unknown：调用方漏传时，日志里一眼看得出是谁没交代理由。
+        /// </summary>
+        public void BlurInput(string reason = "unknown")
         {
             EnsureBound();
             if (_input == null) return;
-            _input.Blur();
+            var wasFocused = FocusName(CurrentFocused());
+            DeepBlur();
+            LogFocus(reason, "none", wasFocused);
             var handler = FocusChanged;
             if (handler != null) handler(false);
+        }
+
+        /// <summary>
+        /// 外部把焦点抢回输入框时的留痕（I2）：由 InputModes 每帧代劳，不在这里新开 Update。
+        /// 「过一会它自己回来了」没法靠我们自己的入口记账，只能靠下一次轮询把差异写下来。
+        /// </summary>
+        public void NoteFocusReflow()
+        {
+            EnsureBound();
+            if (_input == null) return;
+            var now = IsInputFocused ? "TextField" : "none";
+            if (now == _lastFocusLogged) return;
+            LogFocus("reflow", now, _lastFocusLogged);
+        }
+
+        /// <summary>
+        /// 深扫一遍再把焦点清掉（H1 的防御）：真实输入时焦点可能落在 TextField 的内层元素上，
+        /// 只 Blur 外层 TextField 未必清得干净；所以「焦点在哪就 Blur 谁」，最后再复查一遍。
+        /// 本轮实测：6000.6.7f1 里 TextField.Blur() 已经能连子元素一起清（TypingGateTests 第 2 条一开始就是绿的），
+        /// 这段是给别的版本/别的焦点来源留的兜底，留着比删掉便宜。
+        /// </summary>
+        void DeepBlur()
+        {
+            var controller = _input.panel != null ? _input.panel.focusController : null;
+            var focused = controller != null ? controller.focusedElement as VisualElement : null;
+            if (focused != null && (focused == _input || _input.Contains(focused))) focused.Blur();
+            _input.Blur();
+            // 复查：还有内层元素握着焦点就再清一次（controller.Blur 不是公开 API，直接对它 Blur）。
+            // 本版本这里空转：TextField.Blur() 已经把子树清干净，这段属未验证假设（别的版本/别的焦点来源才可能用到）。
+            var left = controller != null ? controller.focusedElement as VisualElement : null;
+            if (left != null && _input.Contains(left)) left.Blur();
+        }
+
+        /// <summary>
+        /// 焦点变化留痕（脱敏：只写类型名，绝不写玩家打的字）。from 由调用方在动手前取，
+        /// 所以「TextField -> none reason=escape」读得出是谁被清掉的；from 与 to 相同则算没变化，不写。
+        /// </summary>
+        void LogFocus(string reason, string to, string from)
+        {
+            // 不看 _lastFocusLogged 做二次去重：焦点被外部抢回后再失焦，from/to 与第一次相同，
+            // 那一行恰恰是「回流发生过」的唯一证据，吞掉它就等于把证人删了（双触发由 from == to 挡住）。
+            if (from == to)
+            {
+                _lastFocusLogged = to;
+                return;
+            }
+
+            Debug.Log("[focus] " + from + " -> " + to + " reason=" + reason);
+            _lastFocusLogged = to;
+        }
+
+        VisualElement CurrentFocused()
+        {
+            if (_input == null || _input.panel == null) return null;
+            var controller = _input.panel.focusController;
+            return controller != null ? controller.focusedElement as VisualElement : null;
+        }
+
+        static string FocusName(VisualElement element)
+        {
+            return element == null ? "none" : element.GetType().Name;
+        }
+
+        /// <summary>
+        /// 面板根上的 Escape（设计 §5 防御 2）：不依赖焦点停在哪一层，也不依赖 InputModes 是否在跑。
+        /// 与 InputModes 的 Esc 同一条路（都走 BlurInput），重复触发是幂等的。
+        /// </summary>
+        void OnRootKeyDown(KeyDownEvent evt)
+        {
+            if (evt.keyCode != KeyCode.Escape) return;
+            if (!IsInputFocused) return;
+            BlurInput("escape-root");
+            evt.StopPropagation();
+        }
+
+        /// <summary>把 Escape 挂到当前这棵树的根上（幂等：同一棵树重复调用不会挂两遍）。</summary>
+        void HookEscape(VisualElement root)
+        {
+            if (root == null) return;
+            if (_escapeHooked && ReferenceEquals(_root, root)) return;
+            UnhookEscape();
+            _root = root;
+            _root.RegisterCallback<KeyDownEvent>(OnRootKeyDown, TrickleDown.TrickleDown);
+            _escapeHooked = true;
+        }
+
+        void UnhookEscape()
+        {
+            if (_escapeHooked && _root != null)
+            {
+                _root.UnregisterCallback<KeyDownEvent>(OnRootKeyDown, TrickleDown.TrickleDown);
+            }
+            _root = null;
+            _escapeHooked = false;
         }
 
         /// <summary>
@@ -271,6 +390,17 @@ namespace Mas3D.UI
         void Start()
         {
             EnsureBound();
+        }
+
+        /// <summary>面板关掉/场景卸载时把回调摘干净：别把野回调留在树上（M6）。</summary>
+        void OnDisable()
+        {
+            Unbind();
+        }
+
+        void OnDestroy()
+        {
+            Unbind();
         }
 
         /// <summary>状态行的状态词：待机 / 发送中 / 思考中 / 已回复 / 未回应。</summary>
@@ -362,6 +492,7 @@ namespace Mas3D.UI
             _thinking = root.Q<Label>("thinking");
             _log = root.Q<ScrollView>("log");
             _subtitle = root.Q<Label>("subtitle");
+            HookEscape(root);            // 根节点上的 Escape：不依赖焦点停在哪一层，也不依赖 InputModes 是否在跑
 
             ApplyCjkFallback(root);
             if (_placeholder != null) _placeholder.text = PlaceholderCopy;
@@ -395,6 +526,7 @@ namespace Mas3D.UI
             }
             if (_send != null) _send.clicked -= SendFromInput;
             if (_clear != null) _clear.clicked -= ClearLog;
+            UnhookEscape();              // 旧树上的 Escape 也要摘：否则重建后一次按键会走两遍
             _boundDocument = null;
             _input = null;
             _subtitle = null;    // 旧树上的元素：重新绑定时会换新的

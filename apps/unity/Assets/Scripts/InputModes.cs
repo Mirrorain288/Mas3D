@@ -68,6 +68,9 @@ namespace Mas3D
 
         void Update()
         {
+            // 焦点回流检测放在闸门之前：演出/关闸期间也可能被外部抢走焦点，那正是最需要留痕的时候。
+            PollFocus();
+
             if (!CanTakeKeys) return;
             if (Panel == null) return;
 
@@ -98,18 +101,28 @@ namespace Mas3D
             if (!Panel.IsInputFocused) Panel.FocusInput();
         }
 
-        /// <summary>Esc：退出输入框，走路立刻恢复。</summary>
+        /// <summary>
+        /// 把「焦点自己回来了」这件事记进面板日志（I2）。本组件每帧调一次，
+        /// 不要求调用方自己开 Update；Panel 为空时什么都不做。
+        /// </summary>
+        public void PollFocus()
+        {
+            if (Panel == null) return;
+            Panel.NoteFocusReflow();
+        }
+
+        /// <summary>Esc：退出输入框，走路立刻恢复（reason 只进焦点日志，行为与面板根上的 Escape 同一条路）。</summary>
         public void PressEscape()
         {
             if (Panel == null) return;
-            Panel.BlurInput();
+            Panel.BlurInput("escape");
         }
 
         /// <summary>左键点在面板外面 → 失焦；点在面板里面什么都不做。</summary>
         public void PressOutsideClick(Vector2 screenPoint)
         {
             if (Panel == null || Panel.ContainsScreenPoint(screenPoint)) return;
-            Panel.BlurInput();
+            Panel.BlurInput("outside-click");
         }
     }
 }
