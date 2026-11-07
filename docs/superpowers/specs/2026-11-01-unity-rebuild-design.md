@@ -346,6 +346,23 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - 计数与命令：EditMode **95/95/0/0**、PlayMode **225/224/0/1**（跳过 `BridgeSmokeTests.UiSceneShot`）；`tools/look-shoot.ps1` 一条命令跑完十项判据（六项画质 + 四项眼睛）+ 两对阴影，`exit` = 失败项数，本轮 `failed checks: 0`，产物 `.superpowers/look/2026-11-07/`。
 - **已知限制**：① 虹膜是贴图重绘，达不到参考立绘的手绘质感，只做到「冷绿、有高光、外圈不厚」；② 房间影子在斜角下的 acne 没有单独验（只验了正面与 room 机位）；③ `look-shoot.ps1` 没有接哈希断言，配对失效只能靠 shadow-diff 的变亮守卫兜。
 
+### 5.26 动作热键、姿态键与输入焦点（2026-11-07 实测）
+
+背景：玩家不能在实机触发四件动作，Esc 退不出输入框。设计 `docs/superpowers/specs/2026-11-07-hotkeys-and-focus-design.md`、计划 `docs/superpowers/plans/2026-11-07-hotkeys-and-focus.md`。
+
+- **键位（`apps/unity/Assets/Scripts/ActionHotkeys.cs`）**：数字键 **1 牵手（hands）/ 2 摸她头（pat-her）/ 3 她摸我头（pat-me）/ 4 亲吻（kiss）/ 5 并肩坐（sit-together）**；**C 蹲 / Z 跪 / X 坐**，同键回站；X 要求 1 m 内（实际 **0.6 m**）有座面，否则拒绝。准星 + E 的 spec §8.1 方案本轮不做，保留为将来。
+- **一道门，不是三道**：`CanTakeKeys`（`KeyboardInput` 且玩家没被演出关闸）、`Typing`（`DialoguePanel.IsInputFocused`，子树感知）、`Busy`（`ActionDirector.Current != null`）收进一个 `Ready()`；`Update` **只做 `GetKeyDown` 收集**，一律走 `HandleKey(KeyCode)`，门只有一处（评审曾指出 Update 与 HandleKey 各写一遍门是「不可测的冗余」）。演出期 `ActionDirector` 把 `Player.KeyboardInput` 置 false 且 Cancel 在同一同步帧恢复，不存在「键盘已开但 Current 还在」的帧。
+- **拒绝要说人话**：`Say(fault)` 把 `ActionDirector.LastFaults` 映射成中文（够不着 / 她正忙着 / 得先跪下 / 得先蹲下 / 现在做不了），写 `SetStatus` + `SetError`，原始英文只进 `Debug.Log("[hotkeys] … fault=…")`；任一 `Press*` 成功都 `ClearStatus()`（否则状态行「够不着」会永远挂着，而 notice 永久进历史）。无座与 `Anchors` 缺失是两套文案。
+- **键表本身有自动证据**：`apps/unity/Assets/Tests/EditMode/HotkeyTableTests.cs` 两条——`ActionKeys` 与 `ActionId.All` 一一对应（数量相等、无重复 id、无重复 KeyCode、第 i 个是 `Alpha(i+1)`）、C/Z/X 三键互异且不与数字键冲突。在此之前把 `ActionKeys` 改成 `{A1,A1,A1,A4,A5}` 是**全绿**的。
+- **座位高度要记在玩家身上**：`PlayerMotor` 新增 `_seatTopY`（`PlayerMotor.cs:57-62`），坐姿时写入、还原时（`ActionDirector.RestoreEntering` 与 `Cancel` 都用默认 `seatTopY = 0`）复用它。此前「站到床沿按 X → 进 hands → Esc」会把 eye 从 **1.406 掉回 1.10**，头沉进床垫 0.306 m，这是本轮热键新造出来的组合（之前游戏里没有 X 能坐）。
+- **Esc 的真相与四条防御**（`DialoguePanel.cs`）：`BlurInput` 深扫真实焦点元素后 `.Blur()`，再在面板根挂 `TrickleDown` 的 Escape 兜底，`OnDisable`/`OnDestroy` 摘钩；`[focus] from -> to reason=…` 脱敏日志；`NoteFocusReflow()` + `InputModes.PollFocus()`（`Update` 第一行、两道早退之前）把**外部**抢焦点也记成 `reason=reflow`。`LogFocus` 里按 `_lastFocusLogged` 的**二次去重已删**——它会把「连续第二次失焦」静默吞掉，而那正是玩家「过一会儿又进框」时唯一能留下的证据；去重只剩 `from == to`。
+- **批处理测不出来的两条**：H1（外层 `Blur()` 清不掉内层 TextElement 焦点）在 6000.6.7f1 复现不出来（用例实现前即绿）；H2（组词态 Esc 被输入法吃掉）批处理无从复现。真机判据：再报同一句时先看日志有没有 `escape-root` / `reflow`——有就是键收到了但键盘没回来（查 `PlayerMotor.KeyboardInput` 闸），没有就是键没进 Unity（H2 成立，该上设计 §9 的模态输入条退路）。
+- **状态行有归属**：`ActionHotkeys` 只在拒绝时写状态行，也只清自己写的那句（`_statusFromUs`）。否则玩家在「思考中」按一下 C，会话的阶段提示会被抹掉、看起来像卡住。用例 `ASuccessfulKeyLeavesSomeoneElsesStatusAlone`，变异（去掉归属判断）`Logs/h3-mut-status-owner.xml` 240/238/**1**/1 只红这一条。
+- **计数与红证**：EditMode **97/97/0/0**（`Logs/h3-status-owner-edit.xml`，02:18:29Z）、PlayMode **240/239/0/1**（`Logs/h3-status-owner-play2.xml`，02:20Z 后，跳过 `BridgeSmokeTests.UiSceneShot`）。此前热键收口那一轮是 97/97 与 239/238（`Logs/h2-fix2-final-*.xml`）。红：`h2-task2-red.xml`（235/227/**7**/1，七条全红）、`h2-fix1-red-i1.xml`（`CancelKeepsTheSeatHeight`：1.406 → 1.100）。变异：`h2-fix1-mut-key.xml`（键表重复 key，只红 `ActionKeysAreOneToOneWithTheActionTable`）、`h2-fix1-mut-seat.xml`（去掉 `_seatTopY` 复用）、`h2-fix2-mut-seatdata.xml`（`seat.topY → 0f`，**两条**红：`SittingNeedsASeatWithinReach` 自身就有牙、`CancelKeepsTheSeatHeight`）、`h1-fix-reflow-mut.xml`、`h1-fix-dedupe-mut.xml`（各只红对应一条焦点用例）。
+- **两条值得记的实测**：① 焦点用例 A 如果「抢回焦点后先 `yield` 一帧」，`dedupe` 变异不咬——那一帧 `PollFocus` 已把 `_lastFocusLogged` 刷成 TextField，说明 reflow 是有效的第二道网，测 I1 必须显式 `_modes.enabled = false`；② **C# 不要用 pwsh 的 `Get-Content -Raw` + `-replace` + `Set-Content` 改**，UTF-8 中文会被读成乱码写回，编译报 `error CS1002/CS1010`，变异请用编辑工具做字节级替换。
+- **六门终跑**：`tools/check.ps1` → `summary: 6/6 ok`（web 11.3 s / bridge 11.1 s / unity-edit 28.4 s / unity-play 64.8 s / smoke 65.9 s / player 6.2 s，日志 `apps/unity/Logs/h-check.log`）。
+- **已知限制**：① H2（IME 组词态 Esc）只能真机验；② 面板根 Escape 与 `InputModes` 的 Esc 在真机上可能同一次按键都触发（行为幂等，只多一行 `escape-root` 日志）；③ **坐下不吸附座面**（不改 x/z/yaw，只挡「站得离谱」），按 X 会停在原地坐下；④ 蹲/坐沿用 P7 的整体下沉姿势（脚入地），热键不改变这一条；⑤ `HotkeysAreDeafDuringAnAction` 一类的键映射用例是显式循环而非 `[TestCase]` 参数化（PlayMode 里 UnityTest + NUnit 参数化更脆）；⑥ `PlayerMotor._seatTopY` 只写不清，是「上次坐过的座面」——`ActionDirector` 的两条还原路径是唯一正确用法，其他调用点（含测试）会变成历史相关；⑦ 真实按键链路（`Input.GetKeyDown` → `HandleKey`）在批处理里没有覆盖，测试全走公开接缝。
+
 ## 6. 四件动作的验收判据（可测，不靠肉眼）
 
 | 动作 | 判据 |
@@ -368,6 +385,7 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - **P7 语音与身体**：TTS 逐句播放 + 字幕；锚点间走位（边表 + 胶囊扫掠）；玩家身体 Me.vrm（编辑器/PlayMode/截图）。明细见 §5.23。
 - **P8 观感与操作对齐**：管线归位（Linear + 全局 Volume + 删手写 ACES）、灯与阴影、MToon 明暗与描边、输入门与 IME 字符顺序、相机骨架与真第一人称，判据由 `tools/look-compare.mjs`/`shadow-diff.mjs` 数值化。明细见 §5.24。
 - **P9 眼睛与房间自身投影**：虹膜保结构换色（`_MainTex` 与 `_ShadeTex` 必须一起换）、`RoomSurface` 补 `ShadowCaster`、按结构/家具分档 casting；两对阴影图与四项眼睛判据并入 `tools/look-shoot.ps1` 一条命令。明细见 §5.25。
+- **P10 动作热键与输入焦点**：数字键 1–5 触发四件动作与并肩坐、C/Z/X 摆姿态；拒绝本地化上屏并在成功时只清自己的状态行；键表由 EditMode 用例钉唯一性；Esc 走「深扫真实焦点 + 面板根兜底 + reflow 观测」三条，日志可判定 H1/H2。明细见 §5.26。
 
 ## 8. 已由 YG 拍板的两件事（2026-11-01）
 
