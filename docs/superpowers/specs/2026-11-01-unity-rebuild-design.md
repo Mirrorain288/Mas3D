@@ -363,6 +363,32 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - **六门终跑**：`tools/check.ps1` → `summary: 6/6 ok`（web 11.3 s / bridge 11.1 s / unity-edit 28.4 s / unity-play 64.8 s / smoke 65.9 s / player 6.2 s，日志 `apps/unity/Logs/h-check.log`）。
 - **已知限制**：① H2（IME 组词态 Esc）只能真机验；② 面板根 Escape 与 `InputModes` 的 Esc 在真机上可能同一次按键都触发（行为幂等，只多一行 `escape-root` 日志）；③ **坐下不吸附座面**（不改 x/z/yaw，只挡「站得离谱」），按 X 会停在原地坐下；④ 蹲/坐沿用 P7 的整体下沉姿势（脚入地），热键不改变这一条；⑤ `HotkeysAreDeafDuringAnAction` 一类的键映射用例是显式循环而非 `[TestCase]` 参数化（PlayMode 里 UnityTest + NUnit 参数化更脆）；⑥ `PlayerMotor._seatTopY` 只写不清，是「上次坐过的座面」——`ActionDirector` 的两条还原路径是唯一正确用法，其他调用点（含测试）会变成历史相关；⑦ 真实按键链路（`Input.GetKeyDown` → `HandleKey`）在批处理里没有覆盖，测试全走公开接缝。
 
+### 5.27 玩家身体进包（2026-11-08 实测）
+
+背景：§5.23 的已知限制「打包版没有身体」——`PlayerBody.LoadPrefab` 的 `AssetDatabase` 分支只在编辑器编译，包里永远返回 null。设计 `docs/superpowers/specs/2026-11-08-player-body-in-build-design.md`（方案 A：场景内联）、计划 `docs/superpowers/plans/2026-11-08-player-body-in-build.md`。
+
+- **烘进场景**（`apps/unity/Assets/Editor/CliPlayer.cs` 的 `BakeBody`，:215-238）：`tools/unity.ps1 player` 建场景时把 `Assets/_Local/avatars/Me.vrm` 实例化到 Player 下、先 `SetActive(false)` 再写进 `PlayerBody.Baked`，日志 `[player] body baked renderers=3 height=2.025`。不走 `Resources`/Addressables：VRM 的贴图与 MToon 材质跨包复制容易掉引用，场景内联保证「编辑器里长什么样，包里就长什么样」。
+- **运行时先认场景里的那份**（`apps/unity/Assets/Scripts/PlayerBody.cs:110`）：`Spawn()` 见 `Baked` 就 `SetActive(true)` 收编 + `EnsureBound()`，不再 `Instantiate`；`Prefab`/`LoadPrefab` 只留编辑器兜底。包内实测 `[body] spawned 'Me' source=baked renderers=3 head=2 height=1.700 scale=0.839 feetOffset=0.000 strippedColliders=0`。
+- **自检第六行**（`PlayerSelfTest.BodySummary`，`apps/unity/Assets/Scripts/Boot/PlayerSelfTest.cs:276`）：`body ok renderers={n} height={h:F3} shader={name}`，实测 `body ok renderers=3 height=1.700 shader=VRM10/Universal Render Pipeline/MToon10`；`tools/player-smoke.ps1` 把它列为第六行判据，缺身体时该行变 `body failed reason=no-body` 且门直接红。
+- **变异红（两轮独立复现）**：在 `Spawn()` 顶部插 `Baked = null;`（SHA256 `5850…488D → E37C…8A11`）后只重出包，`player-smoke` 得 `player FAIL (online) exit=0`、`marker missing lines: body ok`；包内 marker `[selftest] body failed reason=no-body`，player 日志 `[body] 找不到 …：玩家只能继续当胶囊`。红的是「不认 Baked」而不是「场景没烘」——`[player] body baked` 照常出现。还原后 SHA256 与原文一致，重出包 `player PASS`；两轮日志留在 `apps/unity/Logs/task4-mutation/` 与 `task4-final/`。
+- **`-nobody 1` 照旧关身体**：包内 marker `[selftest] body failed reason=no-body`，其余五条齐全。场景里那份 inactive Me 仍在，只是没人唤醒它；门若在 `-nobody 1` 下也要求 `body ok` 必假红，这条开关本身是设计内的降级路径。
+- **干净 clone 没有身体资产**：`apps/unity/.gitignore:34` 忽略 `Assets/_Local/`，干净 clone 里没有 `Me.vrm`，`[player] body baked` 不出现，包与 `-nobody 1` 走同一条降级路径。这是资产缺失，不是代码坏；要出带身体的包得先把模型放回 `Assets/_Local/avatars/`（按代码路径与 `-nobody` 实测推断，未单跑干净 clone）。
+- **场景被 Unity 整体重排**：烘焙后 `Main.unity` 的 fileID 全量重排，单这一份的 `git diff` 就是 **17,502** 行变动，绝大多数是重排而非内容；它必须与 `CliPlayer.cs`、`PlayerBody.cs` 同一批提交，否则场景与脚本不自洽。当前 `Main.unity` 459,653 B、`build/Mas3D_Data/level0` 184,048 B。
+- **六门终跑**：`tools/check.ps1 -Python D:\Python\python.exe` → `summary: 6/6 ok`（web 11.2 s / bridge 11.1 s / unity-edit 26.2 s / unity-play 63.6 s / smoke 59.5 s / player 5.1 s，总 178.1 s）；EditMode **97/97/0/0**、PlayMode **249/248/0/1**（跳过 `BridgeSmokeTests.UiSceneShot`）。本机 `python` 是 Store 占位符，pytest 9.2.0 + pytest-asyncio 1.4.1 装在 `%TEMP%\mas3d_pytest_lib`，故必须带 `-Python`；不带时 bridge 门输出 `bridge SKIP (no python; set MAS3D_PYTHON)`，其余五门 5/5 绿。
+- **已知限制**：① 干净 clone 无资产（上条）；② 包里多一份 inactive 的 Me，`-nobody 1` 只保证不唤醒、不保证不加载；③ `Baked` 是场景内联引用，重命名/移动 Me 或换场景要重跑 `unity.ps1 player`；④ 只在 Windows IL2CPP 包上验过。
+
+### 5.28 玩家朝向跟镜头，不跟移动方向（2026-11-08 实测）
+
+背景：m21591「移动时模型朝向不会跟着摄像头，导致穿模遮挡视野」+ 截图（对话框开着，画面左侧一大片深色网格挡住视野）。
+
+- **根因（一处，代码可判）**：`apps/unity/Assets/Scripts/PlayerMotor.cs` 的 `Tick` 只在 `wish≠0` 时把玩家根转向**移动方向**（`Quaternion.LookRotation(wish)`），而相机 yaw 由 `PlayerCameraRig` 独立维护（`Pivot.rotation = Euler(Pitch, Yaw)`）。`PlayerBody.ApplyNow` 只写 `localPosition`、从不写 rotation，所以身体完全继承根朝向：站住转鼠标身体不动；按 A/D/S 平移时身体拧 90–180°，肩部与头发横穿第三人称机位。
+- **红证**（`apps/unity/TestResults/facing-red.xml`）：新增 `apps/unity/Assets/Tests/PlayMode/PlayerFacingTests.cs` 两条，修复前分别红在 `站住转镜头后身体与视线差 90.0°：朝向没有跟镜头`、`平移时身体与视线差 90.0°：跟着移动方向转身了`。
+- **修法**（`PlayerMotor.cs:214-230`）：`_rig` 存在时根朝向每帧朝 `_rig.IntentYaw` 用 `TurnRate`（270 °/s）转过去，wish 只决定速度；没有 rig 时退回旧行为（转向 wish）。转身后照旧补一次 `_rig.Apply()`。演出期 `KeyboardInput=false` 让 `Update` 整台早退、`Tick` 不跑，因此不会与 `ActionDirector` 抢朝向。
+- **绿证**：`facing-green.xml` 2/2；全量 PlayMode `facing-regression.xml` **251 total / 250 passed / 0 failed / 1 skipped**（跳过 `BridgeSmokeTests.UiSceneShot`）。
+- **画面证据**（`apps/unity/Assets/Tests/PlayMode/PlayerFacingShotTests.cs`，`[Explicit]`）：`Shots/facing-strafe.png`（镜头朝 0°、向 +X 平移，仍是后背对着镜头）、`Shots/facing-turn.png`（站住把镜头转到 120°，身体跟过去）。首跑红在 `平移时身体与视线差 5.1°`：场景出生朝向不是 0°，18 帧没收敛完 —— 用例补 45 帧先对准 + 前置断言。
+- **六门终跑**：`tools/check.ps1 -Python D:\Python\python.exe` → `summary: 6/6 ok`（web 11.3 s / bridge 13.1 s / unity-edit 34.4 s / unity-play 64.7 s / smoke 73.8 s / player 5.2 s，总 202.5 s）。
+- **已知限制**：① `Teleport(feet, yaw)` 写下的朝向会在下一次 `Tick` 被拉回镜头 yaw（演出期 Tick 冻结，故只影响「传送后自己走」的场景）；② 近景（boom 被墙压到 1.25 m 以内）靠 `PlayerBody.NearDistance` 藏头，没有做身体淡出；③ 没有行走动画，平移时是「面朝视线、横着滑」。
+
 ## 6. 四件动作的验收判据（可测，不靠肉眼）
 
 | 动作 | 判据 |

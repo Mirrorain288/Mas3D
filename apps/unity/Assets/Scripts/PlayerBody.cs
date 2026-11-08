@@ -49,6 +49,9 @@ namespace Mas3D
         [Tooltip("Optional: the body prefab baked into the scene. Empty in the editor, where the VRM is loaded by path.")]
         public GameObject Prefab;
 
+        [Tooltip("Optional: the body instance baked into the scene by CliPlayer. Adopted, never re-instantiated.")]
+        public GameObject Baked;
+
         public PlayerMotor Motor { get; private set; }
         public PlayerCameraRig Rig { get; private set; }
         public AvatarRig Avatar { get; private set; }
@@ -103,38 +106,53 @@ namespace Mas3D
                 return false;
             }
 
-            var prefab = Prefab != null ? Prefab : LoadPrefab();
-            if (prefab == null)
+            AvatarRig rig = null;
+            if (Baked != null)
             {
-                Debug.LogError("[body] 找不到 " + BodyPrefabPath + "：玩家只能继续当胶囊。"
-                    + "打包时要先把模型烘进场景（Prefab 字段）。");
-                return false;
+                // Baked body: the scene already carries the model, so adopting it is the only thing left to do.
+                // SetActive first: an inactive object's Awake has not run, so the rig would stay unbound.
+                Baked.SetActive(true);
+                rig = Baked.GetComponent<AvatarRig>();
+                if (rig == null) rig = Baked.AddComponent<AvatarRig>();
+                rig.EnsureBound();
+            }
+            else
+            {
+                var prefab = Prefab != null ? Prefab : LoadPrefab();
+                if (prefab == null)
+                {
+                    Debug.LogError("[body] 找不到 " + BodyPrefabPath + "：玩家只能继续当胶囊。"
+                        + "打包时要先把模型烘进场景（Baked 字段）。");
+                    return false;
+                }
+
+                rig = AvatarRig.Spawn(prefab, BodyName);
             }
 
-            Avatar = AvatarRig.Spawn(prefab, BodyName);
+            Avatar = rig;
             var root = Avatar.transform;
             root.SetParent(transform, false);
             root.localPosition = Vector3.zero;
             root.localRotation = Quaternion.identity;
 
-            // The body is drawn inside the capsule that the CharacterController already sweeps.
-            // The spring-bone colliders this VRM came with (if any) are counted before they die: the
-            // "one collider" rule only means something when there was something to remove.
+            Finish(root);
+            return true;
+        }
+
+        /// <summary>Shared tail of both spawn paths: strip, scale, stand, collect, place, log.</summary>
+        void Finish(Transform root)
+        {
             var springColliders = Avatar.GetComponentsInChildren<Collider>(true).Length;
             StripColliders(Avatar.gameObject);
             FitToHeight();
-            // The imported rest pose is a T-pose (AvatarPose.Sitting bends the upper arms 70 deg to get
-            // them down from it). Standing in a T is not a body, it is a warning icon.
             AvatarPose.ArmsDown(Avatar);
-
             CollectHeadRenderers();
             _visibilityApplied = false;
             ApplyNow();
 
-            Debug.Log(string.Format("[body] spawned '{0}' renderers={1} head={2} height={3:F3} scale={4:F3} feetOffset={5:F3} strippedColliders={6}",
-                BodyName, Avatar.GetComponentsInChildren<Renderer>(true).Length, _headRenderers.Count,
-                Avatar.Measure().size.y, root.localScale.x, _feetOffset, springColliders));
-            return true;
+            Debug.Log(string.Format("[body] spawned '{0}' source={1} renderers={2} head={3} height={4:F3} scale={5:F3} feetOffset={6:F3} strippedColliders={7}",
+                BodyName, Baked != null ? "baked" : "prefab", Avatar.GetComponentsInChildren<Renderer>(true).Length,
+                _headRenderers.Count, Avatar.Measure().size.y, root.localScale.x, _feetOffset, springColliders));
         }
 
         /// <summary>

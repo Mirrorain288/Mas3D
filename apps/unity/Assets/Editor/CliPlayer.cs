@@ -58,6 +58,9 @@ namespace Mas3D.Editor
             Debug.Log($"[player] materials={materials} eave={dressing.eaveY:F2}");
 
             var player = BuildPlayer();
+            // After BuildPlayer and before anything else touches the player: BakeBody writes into the
+            // PlayerBody component BuildPlayer just added.
+            BakeBody(player);
             var camera = BuildCamera();
             var bootGo = new GameObject("Session");
             var boot = bootGo.AddComponent<RoomBootstrap>();
@@ -197,10 +200,41 @@ namespace Mas3D.Editor
             controller.skinWidth = 0.02f;
             go.AddComponent<PlayerMotor>();
             go.AddComponent<PlayerCameraRig>();
+            // The scene carries the component, not RoomBootstrap: BuildScene bakes the body into this
+            // one, and Boot() then finds it instead of adding a second PlayerBody to the same player.
+            go.AddComponent<PlayerBody>();
             // A placeholder pose; RoomBootstrap teleports to the solved A2 anchor on play.
             go.transform.position = new Vector3(-0.72f, 0.03f, -0.03f);
             go.transform.rotation = Quaternion.Euler(0f, 86f, 0f);
             return go;
+        }
+
+        // Bakes the VRM into the scene: the packaged build has no Editor/Vrm10Importer, so the body
+        // must already exist as a hierarchy inside Main.unity. Inactive on purpose — RoomBootstrap
+        // adopts and shows it only when the player actually spawns (and never under -nobody 1).
+        static void BakeBody(GameObject player)
+        {
+            var body = player.GetComponent<PlayerBody>() ?? player.AddComponent<PlayerBody>();
+            var source = AssetDatabase.LoadAssetAtPath<GameObject>(PlayerBody.BodyPrefabPath);
+            if (source == null)
+            {
+                Debug.LogWarning("[player] body missing at " + PlayerBody.BodyPrefabPath + " -> 打包版玩家只剩胶囊");
+                return;
+            }
+
+            var instance = (GameObject)PrefabUtility.InstantiatePrefab(source);
+            instance.name = PlayerBody.BodyName;
+            instance.transform.SetParent(player.transform, false);
+            instance.transform.localPosition = Vector3.zero;
+            instance.transform.localRotation = Quaternion.identity;
+            instance.transform.localScale = Vector3.one;
+            instance.SetActive(false);
+
+            var rig = instance.GetComponent<AvatarRig>() ?? instance.AddComponent<AvatarRig>();
+            rig.EnsureBound();
+            body.Baked = instance;
+            Debug.Log(string.Format("[player] body baked renderers={0} height={1:F3}",
+                instance.GetComponentsInChildren<Renderer>(true).Length, rig.Measure().size.y));
         }
 
         static Camera BuildCamera()

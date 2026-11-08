@@ -70,6 +70,57 @@ namespace Mas3D.Tests
             _body.ApplyNow();
         }
 
+        /// <summary>
+        /// 打包版没有 AssetDatabase，身体只能是场景里烘好的那一份。收编的意义全在「不 Instantiate」：
+        /// 再造一个 Me 就会有两套骨骼、两倍 draw call，位置还对不上。
+        /// </summary>
+        [UnityTest]
+        public IEnumerator SpawnAdoptsTheBakedBodyInsteadOfInstantiatingAnother()
+        {
+            RequireBodyAsset();
+
+            var source = UnityEditor.AssetDatabase.LoadAssetAtPath<GameObject>(PlayerBody.BodyPrefabPath);
+            Assert.IsNotNull(source, "缺 " + PlayerBody.BodyPrefabPath);
+
+            // 模拟 CliPlayer 烘进场景的那一份：Player 的子物体、局部 TRS 归零、inactive。
+            var baked = Object.Instantiate(source, _player.transform);
+            baked.name = PlayerBody.BodyName;
+            baked.transform.localPosition = Vector3.zero;
+            baked.transform.localRotation = Quaternion.identity;
+            baked.transform.localScale = Vector3.one;
+            baked.SetActive(false);
+
+            _body.Baked = baked;
+            _body.Attach(_motor, _motor.Head, _rig);
+
+            Assert.IsTrue(_body.Spawn(), "有 Baked 时 Spawn() 必须成功");
+            yield return null;
+
+            Assert.AreSame(baked, _body.Avatar.gameObject, "收编不许再造一个 Me");
+            Assert.IsTrue(baked.activeSelf, "收编后身体要被打开");
+            Assert.AreEqual(0, baked.GetComponentsInChildren<Collider>(true).Length,
+                "烘进场景的 spring collider 也要在 Spawn 里清掉");
+            Assert.AreEqual(1, _player.GetComponentsInChildren<AvatarRig>(true).Length,
+                "玩家下面只该有一个身体");
+        }
+
+        /// <summary>
+        /// -nobody 1 与所有截图机位都指望这一条：没人 Spawn 的时候，场景里那份身体是睡着的。
+        /// </summary>
+        [Test]
+        public void ABakedBodyStaysAsleepUntilSpawnIsCalled()
+        {
+            var baked = new GameObject(PlayerBody.BodyName);
+            baked.transform.SetParent(_player.transform, false);
+            baked.SetActive(false);
+
+            _body.Baked = baked;
+            _body.Attach(_motor, _motor.Head, _rig);
+
+            Assert.IsFalse(baked.activeSelf, "没人 Spawn 之前，烘好的身体必须保持 inactive");
+            Assert.IsFalse(_body.Spawned, "Spawned 只该在 Spawn() 之后为真");
+        }
+
         Renderer[] Visible()
         {
             return _player.GetComponentsInChildren<Renderer>(true)

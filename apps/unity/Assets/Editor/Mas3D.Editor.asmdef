@@ -5,7 +5,8 @@
     "Unity.RenderPipelines.Core.Runtime",
     "Unity.RenderPipelines.Universal.Runtime",
     "Unity.Cinemachine",
-    "Mas3D.Runtime"
+    "Mas3D.Runtime",
+    "VRM10"
   ],
   "includePlatforms": [
     "Editor"

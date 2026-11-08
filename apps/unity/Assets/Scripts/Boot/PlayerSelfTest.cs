@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Runtime.InteropServices;
 using Mas3D.Actions;
@@ -97,6 +98,7 @@ namespace Mas3D.Boot
                 bootToken = DialogueBridge.ReadTokenFromDisk(out tokenSource);
             }
             Mark("token src=" + tokenSource + " len=" + (bootToken != null ? bootToken.Length : 0));
+            Mark(BodySummary(FindAnyObjectByType<PlayerBody>()));
 
             DialogueBridge bridge = null;
             while (_clock.Elapsed.TotalSeconds < BridgeTimeoutSeconds)
@@ -258,6 +260,75 @@ namespace Mas3D.Boot
             {
                 Debug.LogWarning("[selftest] marker 写入失败：" + e.Message);
             }
+        }
+
+        /// <summary>
+        /// One marker line that says whether the packaged player has a body at all, how tall it came out,
+        /// and which shader drew it. A build that lost its URP shaders still renders — pink — so the shader
+        /// name is the only field that separates "body ok" from "body is a warning sign".
+        /// A stripped shader surfaces as a non-empty "Hidden/InternalErrorShader" name, so emptiness alone
+        /// would report such a body as ok; any name starting with "Hidden/" counts as a lost shader.
+        /// Two passes, on purpose: the verdict is decided over every renderer and every material first, and
+        /// only a body that passes every one of those checks gets a line built for it. One usable shader
+        /// cannot outvote a broken one next to it. `renderers=` counts the Renderer components that got
+        /// through the first pass, so the number never includes something the check never looked at.
+        /// </summary>
+        public static string BodySummary(PlayerBody body)
+        {
+            // Spawned is defined as Avatar != null, so this one check already answers both.
+            if (body == null || !body.Spawned) return "body failed reason=no-body";
+
+            var renderers = body.Avatar.GetComponentsInChildren<Renderer>(true);
+            if (renderers.Length == 0) return "body failed reason=no-shader";
+
+            // Pass 1, decide only. Every renderer needs at least one slot, and no non-null material in any
+            // of them may hold a lost shader. A body whose materials are [URP/Lit, Hidden/InternalErrorShader]
+            // is half pink on screen, so "some shader exists" is the wrong question to answer with "ok":
+            // one lost shader fails the whole line.
+            foreach (var renderer in renderers)
+            {
+                if (renderer == null) continue;
+
+                var materials = renderer.sharedMaterials;
+                if (materials.Length == 0) return "body failed reason=no-shader";
+
+                foreach (var material in materials)
+                {
+                    if (material == null) continue;
+                    if (!HasUsableShader(material)) return "body failed reason=no-shader";
+                }
+            }
+
+            // Pass 2, report only. Pass 1 has already proved the scan below finds a usable shader.
+            string shader = null;
+            foreach (var renderer in renderers)
+            {
+                if (renderer == null) continue;
+                foreach (var material in renderer.sharedMaterials)
+                {
+                    if (material == null || !HasUsableShader(material)) continue;
+                    shader = material.shader.name;
+                    break;
+                }
+                if (shader != null) break;
+            }
+
+            // Only reachable when every slot held a null material: nothing usable was found, so nothing to report.
+            if (shader == null) return "body failed reason=no-shader";
+
+            // InvariantCulture: a comma-decimal locale would render height=1,700 and break the smoke regex.
+            return string.Format("body ok renderers={0} height={1} shader={2}",
+                renderers.Length, body.Avatar.Measure().size.y.ToString("F3", CultureInfo.InvariantCulture), shader);
+        }
+
+        /// <summary>A shader draws something only when it exists, has a name, and is not a Hidden/ fallback.</summary>
+        static bool HasUsableShader(Material material)
+        {
+            var shader = material.shader;
+            if (shader == null) return false;
+
+            string name = shader.name;
+            return !string.IsNullOrEmpty(name) && !name.StartsWith("Hidden/", StringComparison.Ordinal);
         }
 
         /// <summary>按自检结果退出进程：0/3/4/5。只认第一次调用，避免超时和成功路径重复刷码。</summary>

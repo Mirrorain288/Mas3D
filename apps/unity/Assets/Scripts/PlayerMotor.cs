@@ -211,15 +211,21 @@ namespace Mas3D
             var motion = _planar * dt + Vector3.up * (_vertical * dt);
             _controller.Move(motion);
 
-            if (wish.sqrMagnitude > 0.0001f)
+            // 朝向跟镜头意图 yaw，不跟移动方向。身体是玩家根的子物体，PlayerBody 只写 localPosition、
+            // 从不写 rotation，所以「身体朝哪」全由这一转决定。旧写法只在 wish≠0 时把根转向 wish：
+            // 站住转鼠标身体不动，平移/后退时身体拧 90–180°，肩部与头发横穿第三人称机位挡住视野（m21591）。
+            // 演出期间 KeyboardInput=false 让 Update 整台早退、Tick 不跑，因此这里不会与 ActionDirector 抢朝向。
+            if (_rig == null) _rig = GetComponent<PlayerCameraRig>();
+            var face = _rig != null
+                ? Quaternion.Euler(0f, _rig.IntentYaw, 0f)
+                : (wish.sqrMagnitude > 0.0001f ? Quaternion.LookRotation(wish, Vector3.up) : transform.rotation);
+            if (face != transform.rotation)
             {
-                var look = Quaternion.LookRotation(wish, Vector3.up);
-                transform.rotation = Quaternion.RotateTowards(transform.rotation, look, TurnRate * dt);
+                transform.rotation = Quaternion.RotateTowards(transform.rotation, face, TurnRate * dt);
 
                 // 转完身之后补一次相机姿态：PlayerCameraRig.Update 很可能比这里先跑（同物体上组件顺序），
                 // 它写完 Pivot 再被这一转带着偏 TurnRate*dt，而 Cinemachine 是在 LateUpdate 取景的。
                 // Apply 幂等，没有 rig 时什么都不做。
-                if (_rig == null) _rig = GetComponent<PlayerCameraRig>();
                 if (_rig != null) _rig.Apply();
             }
         }
