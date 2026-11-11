@@ -41,6 +41,22 @@ namespace Mas3D.Actions
         /// <summary>True while the current table writes <paramref name="bone"/>.</summary>
         public static bool Claims(HumanBodyBones bone) => Claimed.Contains(bone);
 
+        /// <summary>
+        /// Claims a bone without writing it. <see cref="PerformanceMotion"/> layers a breathing offset
+        /// on her spine, and no pose table writes that bone during hands or sit-together: without the
+        /// claim <see cref="AvatarIdle"/> rebuilds the spine from its own baseline on every Update, so
+        /// the bone would flicker between the two writers at whatever rate the scripts happen to run.
+        /// </summary>
+        public static void Claim(HumanBodyBones bone) => Claimed.Add(bone);
+
+        /// <summary>
+        /// The local rotation <paramref name="bone"/> had when the action began, if it was snapshotted.
+        /// The arm blend needs it for the bones the IK owns but the table never writes: their live
+        /// value on any frame after the first is already blended, so snapshotting that would make the
+        /// blend start from itself and never hand the arm back.
+        /// </summary>
+        internal static bool TryGetBase(HumanBodyBones bone, out Quaternion rotation) => Base.TryGetValue(bone, out rotation);
+
         /// <summary>True once an action holds a snapshot and has not handed it back yet.</summary>
         public static bool Active => Taken.Count > 0;
 
@@ -190,6 +206,75 @@ namespace Mas3D.Actions
                 { HumanBodyBones.Chest, new Vector3(10f, 0f, 0f) },
                 { HumanBodyBones.RightUpperArm, new Vector3(0f, 0f, -64f) },
                 { HumanBodyBones.RightLowerArm, new Vector3(0f, -24f, 0f) },
+            };
+
+        /// <summary>
+        /// Crouch: the player's own squat for pat-me. Positive X on the upper leg pitches the knee
+        /// forward; the shin then folds back by more than the thigh went forward, and the foot takes
+        /// the remainder so the sole stays flat. The three angles add up to zero (84 - 150 + 66), and
+        /// a measured sweep on the fitted body showed the foot's world rotation does not move at all
+        /// (foot roll 0.0 deg at every candidate), so the sole stays parallel to the floor. Both legs
+        /// get the same fold - a crouch is symmetric.
+        ///
+        /// The depth is measured, not chosen by eye. The crouched eye is 1.05 against 1.62 standing,
+        /// so the stance drops the root 0.570 m and the fold has to lift the ankles by the same 0.570
+        /// or the feet go under the floor. Measured ankle rise at full weight: 84/-150/66 gives
+        /// 0.5673 m (sole 2.7 mm low), 80/-144/64 gives 0.5288 m (41 mm low), 74/-138/64 gives
+        /// 0.4921 m. The knee ends at 147.8 degrees and the ankle is 32 mm in front of the hips, so
+        /// the foot stays under the body.
+        /// </summary>
+        public static readonly IReadOnlyDictionary<HumanBodyBones, Vector3> CrouchLegs =
+            new Dictionary<HumanBodyBones, Vector3>
+            {
+                { HumanBodyBones.LeftUpperLeg, new Vector3(84f, 0f, 0f) },
+                { HumanBodyBones.LeftLowerLeg, new Vector3(-150f, 0f, 0f) },
+                { HumanBodyBones.LeftFoot, new Vector3(66f, 0f, 0f) },
+                { HumanBodyBones.RightUpperLeg, new Vector3(84f, 0f, 0f) },
+                { HumanBodyBones.RightLowerLeg, new Vector3(-150f, 0f, 0f) },
+                { HumanBodyBones.RightFoot, new Vector3(66f, 0f, 0f) },
+            };
+
+        /// <summary>
+        /// Kneel: the kiss stance. The kneeling eye is 1.28 against 1.62 standing, so this stance only
+        /// drops the root 0.340 m and the fold has to lift the ankles by 0.340. The first draft used
+        /// the crouch-depth angles here (84/-150/66); measured, those lift the ankles 0.5673 m, so with
+        /// a root at -0.340 the feet float 0.227 m in the air. 60/-112/52 lifts 0.3352 m (sole 4.8 mm
+        /// low), knee 109.8 degrees, ankle 14 mm in front of the hips: a half kneel with the shins
+        /// angled back under the hips, not a knee on the floor - the eye table does not go low enough
+        /// for that. The sum is zero again (60 - 112 + 52), so the foot stays level.
+        /// </summary>
+        public static readonly IReadOnlyDictionary<HumanBodyBones, Vector3> KneelLegs =
+            new Dictionary<HumanBodyBones, Vector3>
+            {
+                { HumanBodyBones.LeftUpperLeg, new Vector3(60f, 0f, 0f) },
+                { HumanBodyBones.LeftLowerLeg, new Vector3(-112f, 0f, 0f) },
+                { HumanBodyBones.LeftFoot, new Vector3(52f, 0f, 0f) },
+                { HumanBodyBones.RightUpperLeg, new Vector3(60f, 0f, 0f) },
+                { HumanBodyBones.RightLowerLeg, new Vector3(-112f, 0f, 0f) },
+                { HumanBodyBones.RightFoot, new Vector3(52f, 0f, 0f) },
+            };
+
+        /// <summary>
+        /// Sit: the seated stance for sit-together. Thighs level (86) and shins straight down (-86),
+        /// the classic chair pose; the foot stays neutral. The sum is zero (86 - 86 + 0), so the shin
+        /// hangs vertically under the knee. Measured ankle rise 0.3414 m.
+        ///
+        /// Sitting is the one stance whose root is set by the seat, not by a fixed eye: sit-together
+        /// uses seat S2 (topY 0.906), so the eye is 1.406 and the root is -0.214 - with a 0.3414 m
+        /// lift the soles hang 0.127 m above the floor, which is what sitting on a bed that high looks
+        /// like. The same table on the free-standing bench (S1, topY 0.604) would put the feet 0.175 m
+        /// under the floor; one leg table cannot serve both seats because the eye, not the legs, is
+        /// what changes.
+        /// </summary>
+        public static readonly IReadOnlyDictionary<HumanBodyBones, Vector3> SitLegs =
+            new Dictionary<HumanBodyBones, Vector3>
+            {
+                { HumanBodyBones.LeftUpperLeg, new Vector3(86f, 0f, 0f) },
+                { HumanBodyBones.LeftLowerLeg, new Vector3(-86f, 0f, 0f) },
+                { HumanBodyBones.LeftFoot, new Vector3(0f, 0f, 0f) },
+                { HumanBodyBones.RightUpperLeg, new Vector3(86f, 0f, 0f) },
+                { HumanBodyBones.RightLowerLeg, new Vector3(-86f, 0f, 0f) },
+                { HumanBodyBones.RightFoot, new Vector3(0f, 0f, 0f) },
             };
     }
 }

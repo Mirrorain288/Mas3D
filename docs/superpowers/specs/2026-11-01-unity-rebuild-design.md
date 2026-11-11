@@ -389,6 +389,21 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - **六门终跑**：`tools/check.ps1 -Python D:\Python\python.exe` → `summary: 6/6 ok`（web 11.3 s / bridge 13.1 s / unity-edit 34.4 s / unity-play 64.7 s / smoke 73.8 s / player 5.2 s，总 202.5 s）。
 - **已知限制**：① `Teleport(feet, yaw)` 写下的朝向会在下一次 `Tick` 被拉回镜头 yaw（演出期 Tick 冻结，故只影响「传送后自己走」的场景）；② 近景（boom 被墙压到 1.25 m 以内）靠 `PlayerBody.NearDistance` 藏头，没有做身体淡出；③ 没有行走动画，平移时是「面朝视线、横着滑」。
 
+### 5.29 动作三段式：进场 / 保持 / 退场（2026-11-11 实测）
+
+背景：m19288 起的五个动作（双手牵手、摸她头、她摸我头、亲吻、并肩坐床）此前是**瞬间到位**——`TryEnterAction` 一帧就把人放到 mark、手臂硬切到位、Esc 一帧弹回。这一节记录把它们拆成「走进来 / 保持活着 / 松手退出去」后的实测事实。计划与设计分别是 `docs/superpowers/plans/2026-11-08-action-phases.md`、`docs/superpowers/specs/2026-11-08-action-performances-design.md`（§5.5 是本节的相权威）。
+
+- **时钟（`ActionPhase` + `PerformanceTiming`）**：`None / Enter / Hold / Leave`。相位长度照 spec 逐字：hands 2.6 / 1.6 s、pat-her 0.9 / 0.7、pat-me 0.9 / 0.7、kiss 1.4 / 1.0、sit-together 2.2 / 1.4。`IkWeight(phase, u)`：进场前 70% 为 0（先把路走完再伸手）、其后 smoothstep 到 1；保持段恒 1；退场前 30% 从 1 平滑回 0。`Hold` 的时钟**接着进场那一帧的溢出量**跑（`_phaseTime -= _phaseDuration`，不是清零），所以微动的相位在换段处不跳。`Cancel()` 仍是瞬时复位，`ClearPoseCount` 每件动作恰好记一次。
+- **进场是走进去，不是传送**：`_pathActive = !IsSettle(id)`——只有 kiss 与 sit-together 是 settle（一帧到位），其余三件从玩家当前站位走。超过 `MaxApproach` 的富余先「切」一段（`Teleport` 只搬位置、保留当时朝向），之后每一米都扫掠。翻面那一帧先 `SnapToPathEnd()` 再重解姿势（`DrivePose()`），否则会渲出一帧「人已贴 mark、手还朝两米外伸」。进场中途按 Esc：人从**走到的位置**开始退场，终点仍是进场前存下的原位（`_wasSpot`）。
+- **保持段必须活着**（`PerformanceMotion`）：她的头 ±1.35°、脊柱 ±0.8°**侧倾（Z 轴）**、双手 ±2° 手腕自转；他的脊柱 ±0.6° 呼吸性前后（X 轴）。全部是**基准姿势 × 偏移**，基准在保持段第一帧取一次——累乘会让没有表重写的骨头积分漂移。实测（`[perfmotion]`）：6 s 保持 head 1.708° / spine 0.790° / 双手 2.024°/2.220°，掌心接触 **0.0000 m**；120 s head 峰值 2.4167°、spine 0.8089°，100 s 全部回 0.00000（头 2.4 s、手 27.0 s、脊柱 20 s 的公倍周期）；60 Hz 与 30 Hz 在同一秒内差 0.003°（0.2502 vs 0.2471）。
+- **手部微动后乘在手腕自身 Z 轴**：`DriveArm` 末尾的 `LookRotation(look, up)` 会覆盖整条旋转，所以 roll 只能乘在它之后（`rotation *= Euler(0,0,HandRoll)`）。`ActionGeometry.HerPalm = hand.position + hand.forward * 0.08f` 只用 position 与 forward，绕 forward 的 roll 对两者逐位不变 → 接触代价 **0 m**（不是毫米级偏差）。
+- **kiss 是例外**：它没有 IK（两具头骨按表摆），全幅微动会在 100 s 内把额头间距推到 0.0214 m 顶破 `Held`，所以只发 0.6 比例，实测间距 **1.21–1.52 cm**（容差 0.02）。
+- **腿部三姿势**（`PlayerLegs`）：蹲 / 跪 / 坐在真实骨架上折腿，按 rig 存快照（`ActionPose.Base` 是全局单表，不能借）。实测蹲 (84, −150, 66) 鞋底 −2.7 mm、膝 147.8°；跪 (60, −112, 52) 鞋底 −4.8 mm、膝 109.8°；床沿坐 (86, −86, 0) 双脚悬空 0.127 m。**有姿势表时 `ApplyLegs` 直接传权重 1**：`PhaseWeight` 在前 70% 进场是 0，按权重混会让鞋底在地板下待 1.12 / 1.68 / 2.52 s（脚踝上升是角度的二次项、视线下降是一次项，混中间值补不回来）。
+- **测试与变异（都能复跑）**：`Mas3D.Tests.Action` **58/58**；全量 PlayMode **285 total / 282 passed / 0 failed / 3 skipped**（`full-t4fix.xml`）；六门 **5/5 ok**（`check-t4fix.txt`，bridge 因本机无 pytest 的 python 而 SKIP）。变异：① 翻面时钟改 `= 0f` → 9/8/1；② `_pathActive` 恒 false（每件动作都传送到位）→ `ActionEntryTests` **4 条里 3 条红**（含 `HandsEntryWalksThePlayerInInsteadOfTeleporting`），还原后 4/4；③ 去掉腿的权重修正 → 鞋底 −0.570 m；④ 删掉 breathe 的脊柱写入 → 10 条里 2 条红；⑤ `KissScale = 0` 且不写回 → 10 条里 2 条红。
+- **画面证据**（`apps/unity/Assets/Tests/PlayMode/ActionPerformanceShotTests.cs`，`[Explicit]`）：`Shots/stage-a.png`（保持首帧）、`stage-b.png`（2 s 后）、`stage-c.png`（退场 60%）、拼图 `Shots/hands-phases.png`。判据：保持段 2 s 内像素变化 > 0.05%（实测 **0.122%**，证明没冻住），进场 vs 退场平均差 > 3%（实测 **7.71%**）。**PlayMode 里 `Time.deltaTime` 只有约 0.75 ms/帧**（60 帧才推进 0.045 s），所以用例 `DriveInUpdate=false` + 手动 `Tick(1/60f)`，别等帧。
+- **打包自检多了第八行**：`[selftest] stage ok enter=2.600 hold=… leave=1.600 clip=procedural`（`PlayerSelfTest.StageSummary`），`tools/player-smoke.ps1` 的 `$wants` 相应从七行加到八行——**旧 `build/Mas3D.exe` 不带这行，改完必须 `tools/unity.ps1 build` 重打**，否则 player 门会红。
+- **已知限制**：① 没有行走循环，进场是「面朝目标滑过去」，脚不迈；② 退场只在原地松手播完，人**不真的走回去**，`Cancel()` 最后仍把玩家瞬移回原位；③ `CliPlayer` 的编辑器截图原先只推进 90 帧，hands（2.6 s = 156 步）与 sit-together（2.2 s = 132 步）会截在进场中途；现改成「推进到 `Phase == Hold`（上限 10 s）再保持 1.5 s」，日志多打 `enter=<步数>`——实测 `enter=157 / 55 / 85 / 133`（hands / pat-me / kiss / sit-together），`held=1.50`；④ pat-her 的 `BowHeadTo` 会覆盖头骨，她的头部微动在那件动作里看不见（已记进 spec §5.5）。
+
 ## 6. 四件动作的验收判据（可测，不靠肉眼）
 
 | 动作 | 判据 |
@@ -412,6 +427,7 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - **P8 观感与操作对齐**：管线归位（Linear + 全局 Volume + 删手写 ACES）、灯与阴影、MToon 明暗与描边、输入门与 IME 字符顺序、相机骨架与真第一人称，判据由 `tools/look-compare.mjs`/`shadow-diff.mjs` 数值化。明细见 §5.24。
 - **P9 眼睛与房间自身投影**：虹膜保结构换色（`_MainTex` 与 `_ShadeTex` 必须一起换）、`RoomSurface` 补 `ShadowCaster`、按结构/家具分档 casting；两对阴影图与四项眼睛判据并入 `tools/look-shoot.ps1` 一条命令。明细见 §5.25。
 - **P10 动作热键与输入焦点**：数字键 1–5 触发四件动作与并肩坐、C/Z/X 摆姿态；拒绝本地化上屏并在成功时只清自己的状态行；键表由 EditMode 用例钉唯一性；Esc 走「深扫真实焦点 + 面板根兜底 + reflow 观测」三条，日志可判定 H1/H2。明细见 §5.26。
+- **P11 动作三段式**：进场走位、保持段微动、退场松手三段时钟 + 腿部蹲/跪/坐折叠；全程程序化、不引入 AnimationClip。明细见 §5.29。
 
 ## 8. 已由 YG 拍板的两件事（2026-11-01）
 
@@ -424,8 +440,8 @@ YG 的原话（m07264）：「做A，等 Unity 侧有了自己的 smoke 探针�
 - Unity 具体版本号与 URP 版本、渲染管线设置细节。
 - glTF 运行时导入 vs Blender 转 FBX 的最终取舍。
 - UI Toolkit vs uGUI 的最终取舍（打字面板输入法）。
-- 玩家角色动画资产来源（Mixamo / 自建 / VRoid 兼容）、第三人称相机与晕动处理。
-- 双人动作对齐的具体 IK 方案（Animation Rigging vs 自写 TwoBoneIK + 接触点求解）。
+- ~~玩家角色动画资产来源（Mixamo / 自建 / VRoid 兼容）~~ → 已定：**程序化，不引入 clip**（§5.29）；第三人称相机与晕动处理见 §5.24。
+- ~~双人动作对齐的具体 IK 方案（Animation Rigging vs 自写 TwoBoneIK + 接触点求解）~~ → 已定：**自写 TwoBoneIK + 接触点代理**（`ActionGeometry.HerPalm = hand.position + hand.forward * 0.08 m`），保持段残差 0.0000 m（§5.29）。
 - 房间碰撞体生成策略（每网格 MeshCollider vs 合并、玩家胶囊半径）。
 
 ## 10. 验收与回退

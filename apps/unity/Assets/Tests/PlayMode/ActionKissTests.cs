@@ -55,6 +55,7 @@ namespace Mas3D.Tests
         {
             Assert.Greater(_player.EyeHeight, 1.004f, "跪姿 eye 必须高于座面 0.604 + 0.40 m，否则镜头会掉进坐垫");
             Assert.IsTrue(_director.TryEnterAction(ActionId.Kiss), "跪在她面前时亲吻必须能进场");
+            ActionTestDrive.ToHold(_director);   // 1.4 s 的进场走完，接触才算数
             for (var i = 0; i < 20; i++) { _director.Tick(1f / 60f); yield return null; }
             var gap = Vector3.Distance(ActionGeometry.HerHeadCenter(_actor.Rig), PlayerReach.Face(_player));
             Assert.Less(gap, 0.06f, "两张脸最近处必须 ≤ 6 cm");
@@ -64,6 +65,7 @@ namespace Mas3D.Tests
         public IEnumerator TheFacesAlignWithinFifteenDegrees()
         {
             Assert.IsTrue(_director.TryEnterAction(ActionId.Kiss));
+            ActionTestDrive.ToHold(_director);
             for (var i = 0; i < 20; i++) { _director.Tick(1f / 60f); yield return null; }
             var align = ActionGeometry.FaceAlign(_actor.Rig, PlayerReach.Face(_player));
             Assert.Less(align, 15f, "她的面部朝向与她对玩家的连线偏差必须 ≤ 15°");
@@ -88,6 +90,7 @@ namespace Mas3D.Tests
             var head = _actor.Rig.Bone(HumanBodyBones.Head);
             var before = head.localRotation;
             Assert.IsTrue(_director.TryEnterAction(ActionId.Kiss));
+            ActionTestDrive.ToHold(_director);   // 进场 1.4 s 不记 Held，先走完再数这 2.6 s
             for (var i = 0; i < 156; i++) { _director.Tick(1f / 60f); yield return null; }   // 2.6 s
             Assert.GreaterOrEqual(_director.Held, 2.0f, "接触必须稳定保持 2 s 以上");
             Assert.Greater(Quaternion.Angle(before, head.localRotation), 10f, "进场后她必须真的俯身，否则这条测的是静物");

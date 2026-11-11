@@ -69,9 +69,12 @@ namespace Mas3D.Tests
                     Assert.IsTrue(director.TryEnterAction(step.Id),
                         step.Id + " 在真实场景里进不了场：" + director.LastFaults);
                     Assert.AreEqual(step.Id, director.Current, "进场后 Current 必须是 " + step.Id);
+
+                    // Held 只在 Hold 里记账：先把进场走完（hands 的 2.6 s 最长），再数这 1.5 s。
+                    // 进场可以是走过去的，所以"离开出生点"要在走完之后量，而不是进场那一帧。
+                    ActionTestDrive.ToHold(director);
                     Assert.Greater(Vector3.Distance(spawn, player.transform.position), 0.05f,
                         step.Id + " 进场后玩家必须离开出生点（证明 plan 真的被摆过）");
-
                     for (var i = 0; i < StepsPerAction; i++) director.Tick(Step);
 
                     Assert.GreaterOrEqual(director.Held, MinHeld,

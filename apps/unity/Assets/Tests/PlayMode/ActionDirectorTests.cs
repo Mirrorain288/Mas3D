@@ -72,12 +72,16 @@ namespace Mas3D.Tests
             Assert.AreEqual(ActionId.Hands, _director.Current, "Current 必须是 hands");
             Assert.IsFalse(_player.KeyboardInput, "演出态必须锁住键盘");
             var seat = AnchorTable.Load().Seat("S1");
+            // 进场是走过去的，不是瞬移：落点和朝向在 Hold 的第一帧才成立（走不到的部分由收尾的
+            // 一步贴上）。时钟也只在 Hold 里记接触，所以同一时刻量完再验记账。
+            ActionTestDrive.ToHold(_director);
             var want = new Vector3(seat.x, 0f, seat.z) + Quaternion.Euler(0f, seat.facingY, 0f) * Vector3.forward * 0.62f;
             Assert.AreEqual(want.x, _player.transform.position.x, 0.02f, "玩家必须被摆到她正前方 0.62 m");
             Assert.AreEqual(want.z, _player.transform.position.z, 0.02f, "x/z 都要对上");
             Assert.AreEqual(90f, _player.transform.eulerAngles.y, 1f, "玩家必须面向她（她朝 -X，所以玩家朝 +X）");
+            var held = _director.Held;
             _director.Tick(0.5f);
-            Assert.AreEqual(0.5f, _director.Held, 1e-4f, "Tick 必须把时间记进 Held");
+            Assert.AreEqual(held + 0.5f, _director.Held, 1e-4f, "Tick 必须把时间记进 Held");
         }
 
         [UnityTest]
@@ -153,11 +157,13 @@ namespace Mas3D.Tests
         {
             yield return null;
             Assert.IsTrue(_director.TryEnterAction(ActionId.Hands));
+            ActionTestDrive.ToHold(_director);   // Held 只在 Hold 里记账
+            var held = _director.Held;
             _director.Tick(0.5f);
             // 同一个动作、同样可达：唯一的理由只能是"已经在演出"
             Assert.IsFalse(_director.TryEnterAction(ActionId.Hands), "动作进行中再按同一个动作也必须被忽略");
             Assert.AreEqual(ActionId.Hands, _director.Current, "Current 不许被第二次调用改掉");
-            Assert.AreEqual(0.5f, _director.Held, 1e-4f, "第二次进场不许把 Held 归零");
+            Assert.AreEqual(held + 0.5f, _director.Held, 1e-4f, "第二次进场不许把 Held 归零");
             StringAssert.StartsWith("busy", _director.LastFaults, "第二次进场必须报 busy");
         }
 

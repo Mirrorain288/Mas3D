@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 using Mas3D.Avatar;
 using UnityEngine;
 
@@ -112,6 +113,16 @@ namespace Mas3D.Actions
         /// </summary>
         public const float MaxUpdateStep = 0.1f;
 
+        /// <summary>
+        /// Longest remaining gap the entry is willing to walk. A player further than this is first
+        /// placed on the line at this distance: the entry introduces the action, it is not a
+        /// cross-room commute, and the room's furniture makes a long sweep unreliable.
+        /// </summary>
+        public const float MaxApproach = 2.5f;
+
+        /// <summary>Remaining gap the entry tolerates when it ends; anything larger is snapped, in metres.</summary>
+        public const float ApproachArrive = 0.05f;
+
         /// <summary>Everything one action needs decided up front, before any state is touched.</summary>
         struct Plan
         {
@@ -128,6 +139,10 @@ namespace Mas3D.Actions
         string _current;
         float _held;
         float _contactError;
+        ActionPhase _phase;
+        float _phaseTime;
+        float _phaseDuration;
+        float _leaveFrom = 1f;
         string _lastFaults;
 
         Vector3 _wasSpot;
@@ -144,6 +159,33 @@ namespace Mas3D.Actions
         /// <summary>Where the bed plan puts her hips, so the sit's contact can be measured live.</summary>
         Vector3 _bedHips;
 
+        /// <summary>The walk an approach entry follows; unused by a settle and while idle.</summary>
+        PlayerPath _path;
+
+        /// <summary>True while the entry still owns the player's feet (an approach, before the snap).</summary>
+        bool _pathActive;
+
+        /// <summary>Where the entry's camera ends: the plan's orbit and the boom it asks for.</summary>
+        float _cameraOrbitYaw;
+        float _cameraOrbitPitch;
+        float _cameraDistance;
+
+        /// <summary>Where the camera stood when the leave began; the leave eases home from here.</summary>
+        float _leaveCameraYaw;
+        float _leaveCameraPitch;
+        float _leaveCameraDistance;
+
+        /// <summary>Arm bones the IK may claim, in the order the blend snapshot stores them.</summary>
+        static readonly HumanBodyBones[] ArmBones =
+        {
+            HumanBodyBones.LeftUpperArm, HumanBodyBones.LeftLowerArm, HumanBodyBones.LeftHand,
+            HumanBodyBones.RightUpperArm, HumanBodyBones.RightLowerArm, HumanBodyBones.RightHand,
+        };
+
+        /// <summary>Their local rotations before the first solve this frame; reused, never allocated.</summary>
+        readonly Quaternion[] _armSnapshot = new Quaternion[6];
+        bool _armSnapshotTaken;
+
         /// <summary>Id of the action in progress, or null while idle.</summary>
         public string Current => _current;
 
@@ -153,15 +195,56 @@ namespace Mas3D.Actions
         /// <summary>Metres between her palm and the player's marker, measured after the last solve.</summary>
         public float ContactError => _contactError;
 
+        /// <summary>Which leg of the performance the clock is on; None while idle.</summary>
+        public ActionPhase Phase => _phase;
+
+        /// <summary>
+        /// Seconds spent in the current phase. The hold continues the entry's clock from the fraction
+        /// it carried over, so it neither freezes nor restarts at zero.
+        /// </summary>
+        public float PhaseTime => _phaseTime;
+
+        /// <summary>Nominal length of the current phase in seconds; zero for the hold and for idle.</summary>
+        public float PhaseDuration => _phaseDuration;
+
+        /// <summary>
+        /// How much of her bones the performance may claim, 0 to 1: <see cref="PerformanceTiming.IkWeight"/>
+        /// of the phase and its progress. The hold is always 1 and idle always 0. A leave starts from
+        /// the weight it interrupted, so pressing Escape mid-entry never snaps her to full strength.
+        /// </summary>
+        public float PhaseWeight
+        {
+            get
+            {
+                float u = _phaseDuration > 0f ? _phaseTime / _phaseDuration : 0f;
+                return _phase == ActionPhase.Leave
+                    ? _leaveFrom * PerformanceTiming.IkWeight(ActionPhase.Leave, u)
+                    : PerformanceTiming.IkWeight(_phase, u);
+            }
+        }
+
         /// <summary>Why the last entry or cancel was turned down, or null when it went through.</summary>
         public string LastFaults => _lastFaults;
 
         /// <summary>How often the pose layer was handed back; one action must restore exactly once.</summary>
         public int ClearPoseCount => _clearPoseCount;
 
+        /// <summary>The mark the last successful entry resolved, in world space; the walk ends here.</summary>
+        public Vector3 LastSpot { get; private set; }
+
+        /// <summary>
+        /// The player's visible body, when one is installed; null on the bare-capsule rigs the older
+        /// tests build. Read through the player rather than cached, so a body spawned after the
+        /// director was wired is still found on the next frame.
+        /// </summary>
+        public PlayerBody Body => Player != null ? Player.GetComponent<PlayerBody>() : null;
+
+        /// <summary>Her avatar, or the player's, whichever this director is folding; null when absent.</summary>
+        public AvatarRig BodyRig => Body != null ? Body.Avatar : null;
+
         void Update()
         {
-            if (KeyboardInput && Input.GetKeyDown(KeyCode.Escape)) Cancel();
+            if (KeyboardInput && Input.GetKeyDown(KeyCode.Escape)) RequestLeave();
             if (DriveInUpdate) Tick(Mathf.Min(Time.deltaTime, MaxUpdateStep));
         }
 
@@ -170,6 +253,12 @@ namespace Mas3D.Actions
             // Closing the component or unloading the scene must never leave the player locked.
             if (_current != null) Cancel();
         }
+
+        /// <summary>
+        /// Settle actions place the player on the mark in one frame; approach actions walk to it.
+        /// The split is by action, not by distance: even a short kiss is a settle.
+        /// </summary>
+        public bool IsSettle(string id) => id == ActionId.Kiss || id == ActionId.SitTogether;
 
         /// <summary>
         /// Enters an action. This is a question, not a command: an unknown id, an id this task has
@@ -212,8 +301,42 @@ namespace Mas3D.Actions
             Player.KeyboardInput = false;
             try
             {
+                LastSpot = plan.Spot;
                 Player.SetPosture(plan.Posture, plan.SeatTopY);
-                Player.Teleport(plan.Spot, plan.Yaw);
+
+                // Settle and approach are different verbs. A settle (the kiss, the two of them on
+                // the bed) has to be on its mark on frame one: the shot is framed from there and
+                // the pose is measured against it, so there is no walk that could hide a placement.
+                // An approach starts from wherever the player stands and walks the rest.
+                _pathActive = !IsSettle(id);
+                if (_pathActive)
+                {
+                    var from = Player.transform.position;
+
+                    // More than a staging distance away, the surplus is not walked: the entry
+                    // introduces the action, it is not a cross-room commute, and the room's
+                    // furniture makes a 5 m sweep unreliable. The cut happens before the walk, on
+                    // a spot nobody is looking at yet; every metre after it is swept.
+                    if (Vector3.Distance(from, plan.Spot) > MaxApproach)
+                    {
+                        var back = from - plan.Spot;
+                        back.y = 0f;
+                        from = plan.Spot + back.normalized * MaxApproach;
+                        Player.Teleport(from, Player.transform.eulerAngles.y);
+                    }
+
+                    // The yaw comes from the transform after the cut: the cut only moves the player,
+                    // it does not turn them, so a long approach still turns on the way in.
+                    _path = PlayerPath.Between(from, Player.transform.eulerAngles.y, plan.Spot, plan.Yaw);
+                }
+                else
+                {
+                    Player.Teleport(plan.Spot, plan.Yaw);
+                }
+
+                _cameraOrbitYaw = plan.OrbitYaw;
+                _cameraOrbitPitch = plan.OrbitPitch;
+                _cameraDistance = id == ActionId.Kiss ? KissCameraDistance : _wasCameraDistance;
                 if (Camera != null)
                 {
                     // The kiss stands him 0.31 m from her and her capsule surface is 0.115 m from his
@@ -223,12 +346,12 @@ namespace Mas3D.Actions
                     // thin sphere and Cancel puts the room's own radius back.
                     Camera.SetCameraRadius(id == ActionId.Kiss ? KissCameraRadius : RoomCameraRadius);
                     if (id == ActionId.Kiss) Camera.SetDistance(KissCameraDistance);
-                    Camera.SetOrbit(plan.OrbitYaw, plan.OrbitPitch);
+                    if (!_pathActive) Camera.SetOrbit(plan.OrbitYaw, plan.OrbitPitch);
 
                     // The mouse owns the orbit and the scroll wheel owns the boom during normal play, so
-                    // it also owns this shot the moment the player twitches: the kiss framing is set once
-                    // here and would be dragged away on the next frame. Take the input out of its hands
-                    // for the performance and give the flag back on Cancel.
+                    // it also owns this shot the moment the player twitches: the framing is set once
+                    // here (or eased in Tick, for a walk) and would be dragged away on the next frame.
+                    // Take the input out of its hands for the performance and give the flag back on Cancel.
                     Camera.MouseInput = false;
                 }
 
@@ -236,9 +359,18 @@ namespace Mas3D.Actions
                 // is the pose she actually wore when the action began (not AvatarPose's rest pose).
                 ActionPose.Begin(Actor.Rig);
 
+                // The player's legs get their own snapshot, keyed by that body's rig: the crouch, the
+                // kneel and the sit all fold them, and the fold has to start from the legs the player
+                // arrived with. A rig with no body (the older fixtures) simply has nothing to record.
+                PlayerLegs.Begin(BodyRig);
+
                 _current = id;
                 _held = 0f;
                 _contactError = 0f;
+                _phase = ActionPhase.Enter;
+                _phaseTime = 0f;
+                _phaseDuration = PerformanceTiming.Enter(id);
+                _leaveFrom = 1f;
                 _lastFaults = null;
             }
             catch (System.Exception boom)
@@ -277,9 +409,22 @@ namespace Mas3D.Actions
             if (id == ActionId.SitTogether && Actor != null)
                 Actor.SitAt(string.IsNullOrEmpty(Actor.SeatId) ? AvatarActor.DefaultSeatId : Actor.SeatId);
 
+            // A throw between the pose snapshot and `_current = id` leaves two captures behind and no
+            // Cancel to release them: the pose table's base would make the next Begin short-circuit on
+            // a stale base (and hand back this entry's pose instead of its own), and the legs' entry
+            // would fold a stance nobody asked for. Release both here.
+            ActionPose.Forget();
+            RestoreLegs();
+            PerformanceMotion.Restore(BodyRig);
+
             _current = null;
             _held = 0f;
             _contactError = 0f;
+            _phase = ActionPhase.None;
+            _phaseTime = 0f;
+            _phaseDuration = 0f;
+            _leaveFrom = 1f;
+            _pathActive = false;
         }
 
         /// <summary>
@@ -324,33 +469,192 @@ namespace Mas3D.Actions
             }
             finally
             {
+                // Cancel is the one exit every teardown path takes, so the clock is put back here:
+                // a reset that lived in its callers would be forgotten by the next one.
                 _current = null;
                 _held = 0f;
                 _contactError = 0f;
+                _phase = ActionPhase.None;
+                _phaseTime = 0f;
+                _phaseDuration = 0f;
+                _leaveFrom = 1f;
+
+                // The walk belongs to the entry that started it; once the performance is gone there
+                // is no path left to snap to, and a stale one would teleport the next entry's player.
+                _pathActive = false;
             }
         }
 
         /// <summary>
-        /// Advances the action: solves the current pose, then credits the step to the clock only while
-        /// the contact holds. Does nothing while idle.
+        /// Asks the current performance to play its exit and then restore. Idle and an action that is
+        /// already leaving both answer false, so a held-down Escape asks exactly once; the leave ends
+        /// through <see cref="Cancel"/>, which is the path that has always put everything back.
+        /// </summary>
+        public bool RequestLeave()
+        {
+            if (_current == null || _phase == ActionPhase.Leave) return false;
+
+            // Read the weight before the phase moves: it is the level the leave has to start from,
+            // and the leave curve is 1 at its own zero, so without it the first leave frame would
+            // snap her from whatever she had reached straight to full strength.
+            _leaveFrom = PhaseWeight;
+
+            // The walk stops where it stands: a leave is performed in place and only the final
+            // Cancel puts the body back. The camera, however, has to come home from wherever the
+            // entry actually got to - an Escape a third of the way in catches it mid-ease - so its
+            // starting point is read here rather than assumed to be the plan.
+            _pathActive = false;
+            if (Camera != null)
+            {
+                _leaveCameraYaw = Camera.Yaw;
+                _leaveCameraPitch = Camera.Pitch;
+                _leaveCameraDistance = Camera.Distance;
+            }
+
+            _phase = ActionPhase.Leave;
+            _phaseTime = 0f;
+            _phaseDuration = PerformanceTiming.Leave(_current);
+            return true;
+        }
+
+        /// <summary>
+        /// Advances the action: solves the current pose, runs the phase clock one step, then credits
+        /// the step to the hold only while the contact holds. Does nothing while idle.
         /// </summary>
         public void Tick(float dt)
         {
             // A non-positive or NaN step (a comparison with NaN is false) never reaches the clock.
             if (_current == null || !(dt > 0f)) return;
 
-            switch (_current)
+            // The feet move before the hands are solved: her arm then chases the position this
+            // frame actually reached, not the previous frame's, so a walk never drags the contact
+            // a frame behind. The clock still advances last, as it always has.
+            if (_phase == ActionPhase.Enter && _pathActive) AdvanceApproach(dt);
+
+            DrivePose();
+
+            // The clock runs after the pose, so the frame that finishes an entry still poses her. An
+            // entry that runs out turns into the hold; a leave that runs out is over, and the teardown
+            // is Cancel's, not the leave's own, so there is only ever one restoring path.
+            if (_phase == ActionPhase.Enter)
             {
-                case ActionId.Hands: DriveHands(); break;
-                case ActionId.PatHer: DrivePatHer(); break;
-                case ActionId.PatMe: DrivePatMe(); break;
-                case ActionId.Kiss: DriveKiss(); break;
-                case ActionId.SitTogether: DriveSitTogether(); break;
+                _phaseTime += dt;
+                if (_phaseTime >= _phaseDuration)
+                {
+                    // The hold keeps running on the entry's clock, minus the entry's length: the
+                    // overshoot of this frame carries over instead of being thrown away, so the
+                    // micro-motion in PerformanceMotion.Apply has a clock that never jumps.
+                    _phaseTime -= _phaseDuration;
+                    _phase = ActionPhase.Hold;
+                    _phaseDuration = 0f;
+
+                    // The walk is over; anything the capsule could not sweep is closed in one
+                    // step now, while the hold begins and nobody is looking at the seam. The feet
+                    // moved after this frame's pose was solved, so solve again from where they
+                    // landed: otherwise the seam renders one frame of a reach that is already met.
+                    if (_pathActive)
+                    {
+                        SnapToPathEnd();
+                        DrivePose();
+                    }
+
+                    // The frame that flipped the phase is neither an entry nor a hold yet, so it
+                    // must not credit contact; the next frame starts the hold clean.
+                    return;
+                }
+            }
+            else if (_phase == ActionPhase.Leave)
+            {
+                _phaseTime += dt;
+                if (_phaseTime >= _phaseDuration)
+                {
+                    Cancel();
+                    return;
+                }
+
+                // The exit's camera move runs on the leave's own clock: the weight curve is flat
+                // for its first 30 percent, and an Escape early in an entry would otherwise snap
+                // the camera home on the frame it was pressed.
+                EaseCameraHome();
+            }
+            else if (_phase == ActionPhase.Hold)
+            {
+                _phaseTime += dt;
             }
 
-            // A broken contact restarts the hold instead of quietly accumulating through it.
-            if (_contactError <= ContactTolerance) _held += dt;
-            else _held = 0f;
+            // Contact is credited only inside the hold: an entry is still reaching for it and a leave
+            // has already let go, so neither may add to Held. A broken contact restarts the hold
+            // instead of quietly accumulating through it.
+            if (_phase == ActionPhase.Hold && _contactError <= ContactTolerance) _held += dt;
+            else if (_phase == ActionPhase.Hold) _held = 0f;
+        }
+
+        /// <summary>
+        /// One frame of a walked entry: the path point for the phase time already played, moved
+        /// through the controller, and the camera eased by the same fraction so it arrives with him
+        /// instead of overtaking the walk.
+        /// </summary>
+        void AdvanceApproach(float dt)
+        {
+            var u = _phaseDuration > 0f ? Mathf.Clamp01(_phaseTime / _phaseDuration) : 1f;
+            _path.Evaluate(u, out var feet, out var yaw);
+            if (Player != null) Player.MoveTo(feet, yaw, dt);
+
+            if (Camera == null) return;
+
+            // The camera takes the same smoothstep as the feet. Distance is usually unchanged on an
+            // approach (only the kiss moves the boom, and it settles on frame one), so that lerp is
+            // a no-op here; the radius was already set at entry, where it has to be exact.
+            var p = Mathf.SmoothStep(0f, 1f, u);
+            Camera.SetOrbit(
+                Mathf.LerpAngle(_wasCameraYaw, _cameraOrbitYaw, p),
+                Mathf.Lerp(_wasCameraPitch, _cameraOrbitPitch, p));
+            Camera.SetDistance(Mathf.Lerp(_wasCameraDistance, _cameraDistance, p));
+        }
+
+        /// <summary>
+        /// Closes the walk exactly on its mark. The controller may have been stopped short by a
+        /// chair, the bed or a wall; that remainder is a teleport because the capsule cannot be
+        /// swept through it, and it is logged so a snap of half a metre shows up in the report
+        /// instead of passing as a clean walk.
+        /// </summary>
+        void SnapToPathEnd()
+        {
+            _pathActive = false;
+
+            if (Player != null)
+            {
+                var gap = Vector3.Distance(Player.transform.position, _path.To);
+                if (gap > ApproachArrive)
+                {
+                    Player.Teleport(_path.To, _path.ToYaw);
+                    Debug.Log("[stage] approach snapped " + gap.ToString("F3", CultureInfo.InvariantCulture));
+                }
+            }
+
+            if (Camera != null)
+            {
+                Camera.SetOrbit(_cameraOrbitYaw, _cameraOrbitPitch);
+                Camera.SetDistance(_cameraDistance);
+            }
+        }
+
+        /// <summary>
+        /// The leave's half of the camera move: from wherever the entry had eased it to, back to the
+        /// orbit the director borrowed. It runs on the leave's own clock rather than the weight
+        /// curve, because the weight is still 1 for the first 30 percent of a leave taken from the
+        /// hold - and an Escape pressed mid-entry has a weight near zero with the camera nowhere
+        /// near home.
+        /// </summary>
+        void EaseCameraHome()
+        {
+            if (Camera == null) return;
+
+            var p = _phaseDuration > 0f ? Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(_phaseTime / _phaseDuration)) : 1f;
+            Camera.SetOrbit(
+                Mathf.LerpAngle(_leaveCameraYaw, _wasCameraYaw, p),
+                Mathf.Lerp(_leaveCameraPitch, _wasCameraPitch, p));
+            Camera.SetDistance(Mathf.Lerp(_leaveCameraDistance, _wasCameraDistance, p));
         }
 
         /// <summary>
@@ -369,10 +673,96 @@ namespace Mas3D.Actions
             if (Actor == null || Actor.Rig == null)
             {
                 ActionPose.Forget();
+
+                // Her bones are gone, but his spine may not be: the breath leaves the last offset it
+                // wrote in the player's skeleton, and nothing else ever writes that bone back. Restore
+                // when the body survives the teardown; a destroyed rig still answers null here, which
+                // is the one case where dropping the snapshot is all that can be done.
+                var rig = BodyRig;
+                if (rig != null) PerformanceMotion.Restore(rig);
+                else PerformanceMotion.Forget();
+                RestoreLegs();
                 return;
             }
 
             ActionPose.Restore(Actor.Rig);
+
+            // Hers are handed back by the call above; only his spine is ours to write back.
+            PerformanceMotion.Restore(BodyRig);
+            RestoreLegs();
+        }
+
+        /// <summary>
+        /// Solves the running action's pose once. Split out of <see cref="Tick"/> so the frame that
+        /// snaps the walk onto its mark can solve a second time, from the feet it actually landed on.
+        /// </summary>
+        void DrivePose()
+        {
+            switch (_current)
+            {
+                case ActionId.Hands: DriveHands(); break;
+                case ActionId.PatHer: DrivePatHer(); break;
+                case ActionId.PatMe: DrivePatMe(); break;
+                case ActionId.Kiss: DriveKiss(); break;
+                case ActionId.SitTogether: DriveSitTogether(); break;
+            }
+
+            // His body breathes on the same clock, but on a rhythm of its own. Nothing in a performance
+            // depends on his skeleton - every marker the IK chases hangs off the player capsule - so
+            // this one write cannot move a contact; it is here, once, instead of in each Drive.
+            if (_phase == ActionPhase.Hold) PerformanceMotion.ApplyHis(BodyRig, _phaseTime);
+
+            // The legs follow the posture the plan put the player in. Solving them after her own pose
+            // means the body is re-seated from the pose this frame actually produced, and doing the
+            // re-seat here rather than leaving it to LateUpdate is what makes a test that ticks the
+            // director without rendering a frame see the floor contact on the tick it asks for.
+            ApplyLegs();
+        }
+
+        /// <summary>
+        /// Lets the held pose breathe: her micro-motion at the current phase time, stacked on the table
+        /// this frame already wrote and written before the IK solve, so the solve stays the frame's
+        /// truth wherever a hand or her head is glued to a marker. Anything but a hold has nothing to add.
+        /// </summary>
+        void Breathe(AvatarRig rig)
+        {
+            if (_phase != ActionPhase.Hold) return;
+            PerformanceMotion.Apply(rig, _current, _phaseTime);
+        }
+
+        /// <summary>
+        /// Folds the player's legs for the posture the plan chose and lets the body re-seat itself.
+        /// A bare player has no rig to fold and no body to move, so this is a no-op there.
+        /// </summary>
+        void ApplyLegs()
+        {
+            var rig = BodyRig;
+            if (rig == null) return;
+
+            // The fold takes a full weight the moment a posture exists: the stance it has to match is
+            // applied by SetPosture in one frame, so easing the fold with PhaseWeight would leave the
+            // soles that far under the floor for the whole of Enter and Leave (0.57 m crouched, 0.34 m
+            // kneeling). Blending the eye as well does not help - the lift is quadratic in the fold
+            // angle and the eye drop is linear, so half the weight still sinks 0.11 m.
+            var posture = Player != null ? Player.Posture : PlayerPosture.Standing;
+            PlayerLegs.Apply(rig, posture, PlayerLegs.Table(posture) != null ? 1f : PhaseWeight);
+            var body = Body;
+            if (body != null) body.ApplyNow();
+        }
+
+        /// <summary>
+        /// Hands the player's legs back to their entry rotations and re-seats the body. Kept beside
+        /// <see cref="ApplyLegs"/> so the hand-back happens exactly once, on the same frame the pose
+        /// layer hands her bones back.
+        /// </summary>
+        void RestoreLegs()
+        {
+            var rig = BodyRig;
+            if (rig != null) PlayerLegs.Restore(rig);
+            else PlayerLegs.Forget();
+
+            var body = Body;
+            if (body != null) body.ApplyNow();
         }
 
         /// <summary>
@@ -385,9 +775,12 @@ namespace Mas3D.Actions
         {
             var rig = Actor.Rig;
             ActionPose.Apply(rig, ActionPoses.Hands);
+            Breathe(rig);
 
+            SnapshotArms(rig);
             var left = DriveHand(rig, true);
             var right = DriveHand(rig, false);
+            BlendArms(rig, PhaseWeight);
             _contactError = Mathf.Max(left, right);
         }
 
@@ -399,12 +792,62 @@ namespace Mas3D.Actions
             return DriveArm(rig, left, PlayerReach.Palm(Player, left), pole);
         }
 
+        /// <summary>
+        /// Stores the six arm rotations the blend has to return to, before the IK writes. A bone the
+        /// table wrote takes the pose layer's value; a bone only the IK owns (both upper arms, both
+        /// hands) takes the entry base, because its live value on every frame after the first is
+        /// already blended - snapshotting that would compound instead of easing back.
+        /// </summary>
+        void SnapshotArms(AvatarRig rig)
+        {
+            for (var i = 0; i < ArmBones.Length; i++)
+            {
+                var bone = rig.Bone(ArmBones[i]);
+                if (bone == null) continue;
+                _armSnapshot[i] = ActionPose.Claims(ArmBones[i]) || !ActionPose.TryGetBase(ArmBones[i], out var basis)
+                    ? bone.localRotation
+                    : basis;
+            }
+            _armSnapshotTaken = true;
+        }
+
+        /// <summary>
+        /// Gives the IK's claim back to the pose layer in proportion to the weight: a full hold is
+        /// the solved chain untouched, an early entry frame is still mostly her own pose, and a
+        /// leave hands the chain back as the weight falls. The arrays are fixed, so no frame allocates.
+        /// </summary>
+        void BlendArms(AvatarRig rig, float weight)
+        {
+            if (!_armSnapshotTaken) return;
+            _armSnapshotTaken = false;
+
+            // At full weight the solve is the frame's truth; writing it back would only round it.
+            if (weight >= 1f) return;
+
+            for (var i = 0; i < ArmBones.Length; i++)
+            {
+                var bone = rig.Bone(ArmBones[i]);
+                if (bone == null) continue;
+                bone.localRotation = Quaternion.Slerp(_armSnapshot[i], bone.localRotation, weight);
+            }
+        }
+
         /// <summary>Pat-her: bows her head into the hand the player holds over her and measures the gap.</summary>
         void DrivePatHer()
         {
             var rig = Actor.Rig;
             ActionPose.Apply(rig, ActionPoses.PatHer);
+            Breathe(rig);
+
+            // The head is the only bone BowHeadTo writes, so one snapshot is the whole blend: at a
+            // partial weight she aims at the palm only as far as the performance has started.
+            var head = rig.Bone(HumanBodyBones.Head);
+            var before = head != null ? head.localRotation : Quaternion.identity;
             _contactError = BowHeadTo(rig, PlayerReach.Raised(Player, false));
+
+            var weight = PhaseWeight;
+            if (head != null && weight < 1f)
+                head.localRotation = Quaternion.Slerp(before, head.localRotation, weight);
         }
 
         /// <summary>Pat-me: her right hand finds the crouched player's crown; the left arm stays out.</summary>
@@ -412,10 +855,15 @@ namespace Mas3D.Actions
         {
             var rig = Actor.Rig;
             ActionPose.Apply(rig, ActionPoses.PatMe);
+            Breathe(rig);
 
             // The elbow goes forward, like a real hand coming over a head: a sideways pole would
-            // stick her elbow out beside the player's face.
-            _contactError = DriveArm(rig, false, PlayerReach.Crown(Player), Player.transform.forward);
+            // stick her elbow out beside the player's face. The gap is kept before the blend so
+            // Held measures the intent, not how far the animation has ramped in.
+            SnapshotArms(rig);
+            var gap = DriveArm(rig, false, PlayerReach.Crown(Player), Player.transform.forward);
+            BlendArms(rig, PhaseWeight);
+            _contactError = gap;
         }
 
         /// <summary>
@@ -458,6 +906,7 @@ namespace Mas3D.Actions
         {
             var rig = Actor.Rig;
             ActionPose.Apply(rig, ActionPoses.Kiss);
+            Breathe(rig);
             _contactError = Vector3.Distance(ActionGeometry.HerHeadCenter(rig), PlayerReach.Face(Player));
         }
 
@@ -469,6 +918,10 @@ namespace Mas3D.Actions
         /// </summary>
         void DriveSitTogether()
         {
+            // No table is applied here: she is posed on the mattress by AvatarActor.SitOnBed, so the
+            // breath is the only thing that moves her, and the hips stay where the seat put them.
+            Breathe(Actor != null ? Actor.Rig : null);
+
             var hips = Actor != null && Actor.Seat != null ? Actor.Seat.HipsWorld : _bedHips;
             var flat = new Vector2(hips.x - _bedHips.x, hips.z - _bedHips.z).magnitude;
             var drop = Mathf.Abs(hips.y - _bedHips.y);
@@ -505,7 +958,18 @@ namespace Mas3D.Actions
 
             var look = target - hand.position;
             if (look.sqrMagnitude > 1e-8f)
-                hand.rotation = Quaternion.LookRotation(look, Player.transform.up);
+            {
+                var rotation = Quaternion.LookRotation(look, Player.transform.up);
+
+                // A held hand has to close its fingers or it reads as a prop. The roll is post-multiplied
+                // about the very axis LookRotation just aimed down the approach, so it spins the palm
+                // around its own normal: position and forward - the two things the contact is measured
+                // from - come out of this bit-identical, and the solve pays nothing for the motion.
+                if (_phase == ActionPhase.Hold)
+                    rotation *= Quaternion.Euler(0f, 0f, PerformanceMotion.HandRoll(left, _current, _phaseTime));
+
+                hand.rotation = rotation;
+            }
 
             return Vector3.Distance(ActionGeometry.HerPalm(rig, left), target);
         }

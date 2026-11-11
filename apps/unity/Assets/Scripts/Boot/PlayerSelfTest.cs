@@ -26,11 +26,15 @@ namespace Mas3D.Boot
         public const float BridgeTimeoutSeconds = 45f;
         public const float SubmitRetrySeconds = 5f;
         public const float ReplyTimeoutSeconds = 30f;
-        public const float ActionEnterSeconds = 1.5f;
+        /// <summary>Ceiling on waiting for the entry to turn into the hold: hands enters for 2.6 s and the
+        /// clock is frame-driven, so this is a bound rather than a guess at the length.</summary>
+        public const float ActionEnterCapSeconds = 6f;
         public const float ActionHoldSeconds = 1f;
 
-        /// <summary>抖动容差：进场判定的 1.5 s 之外再放 0.1 s，别让一帧的调度延迟把动作判成失败。</summary>
-        public const float ActionSlack = 0.1f;
+        /// <summary>Slack on the hold window. Held accumulates clamped deltas (0.1 s each), so one long
+        /// frame leaves it permanently behind the wall clock; the slack has to cover that, not just a
+        /// normal frame of scheduling delay.</summary>
+        public const float ActionSlack = 0.25f;
 
         public const int ExitOk = 0;
         public const int ExitBridgeTimeout = 3;
@@ -196,16 +200,15 @@ namespace Mas3D.Boot
                 yield break;
             }
 
-            // 进场与保持分开计时：先等 Held 从 0 起来（进场可能比一帧慢），起来之后再独立给 1.0 s + 余量。
+            // Entry and hold are timed apart: wait for the phase to actually flip to the hold (hands
+            // enters for 2.6 s, which a fixed 1.5 s window would cut short), then time the hold on its
+            // own. Held stays at zero until the first frame inside the hold, so the phase is the signal.
             float held = 0f;
-            double enterUntil = _clock.Elapsed.TotalSeconds + ActionEnterSeconds + ActionSlack;
-            while (_clock.Elapsed.TotalSeconds < enterUntil && held <= 0f)
-            {
-                held = director.Held;
+            double enterUntil = _clock.Elapsed.TotalSeconds + ActionEnterCapSeconds;
+            while (_clock.Elapsed.TotalSeconds < enterUntil && director.Phase != ActionPhase.Hold)
                 yield return null;
-            }
 
-            bool entered = held > 0f;
+            bool entered = director.Phase == ActionPhase.Hold;
             if (entered)
             {
                 double holdUntil = _clock.Elapsed.TotalSeconds + ActionHoldSeconds + ActionSlack;
@@ -215,6 +218,11 @@ namespace Mas3D.Boot
                     yield return null;
                 }
             }
+
+            // R6 (Task 5): the three phases have to be visible as numbers, not just as a held counter.
+            // The durations come from PerformanceTiming so a retuned phase breaks the smoke pattern
+            // rather than silently drifting away from it.
+            Mark(StageSummary(director));
 
             director.Cancel();
 
@@ -227,12 +235,12 @@ namespace Mas3D.Boot
 
             if (held < ActionHoldSeconds)
             {
-                Mark("action failed held=" + held.ToString("F2"));
+                Mark("action failed held=" + held.ToString("F2", CultureInfo.InvariantCulture));
                 Finish(ExitActionFailed);
                 yield break;
             }
 
-            Mark("action " + ProbeActionId + " held=" + held.ToString("F2") + " ok");
+            Mark("action " + ProbeActionId + " held=" + held.ToString("F2", CultureInfo.InvariantCulture) + " ok");
             Mark("done");
             Finish(ExitOk);
         }
@@ -241,6 +249,19 @@ namespace Mas3D.Boot
         [DllImport("kernel32.dll", SetLastError = true)]
         static extern void ExitProcess(uint exitCode);
 #endif
+
+        /// <summary>
+        /// One line describing the performance that just ran: the two phase durations the spec fixes and
+        /// how long the hold actually credited. Culture-invariant, because the smoke test matches digits.
+        /// </summary>
+        public static string StageSummary(ActionDirector director)
+        {
+            if (director == null || director.Current == null) return "stage failed reason=no-action";
+
+            return string.Format(CultureInfo.InvariantCulture,
+                "stage ok enter={0:F3} hold={1:F3} leave={2:F3} clip=procedural",
+                PerformanceTiming.Enter(director.Current), director.Held, PerformanceTiming.Leave(director.Current));
+        }
 
         /// <summary>写一行 marker（毫秒时间戳 + 固定前缀）并同步进 player 日志；写盘失败只警告，不让自检跟着倒。</summary>
         public void Mark(string text)

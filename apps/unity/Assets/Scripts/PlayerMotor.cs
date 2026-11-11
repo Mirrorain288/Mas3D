@@ -241,5 +241,28 @@ namespace Mas3D
             _planar = Vector3.zero;
             _vertical = 0f;
         }
+
+        /// <summary>
+        /// Walks the capsule to <paramref name="feet"/> for this frame instead of teleporting it: the
+        /// controller still sweeps the step, so a wall between the player and the mark stops the walk
+        /// and the director snaps the remainder when the entry ends. The facing turns at
+        /// <see cref="TurnRate"/> toward <paramref name="yawDegrees"/>, like a walked turn.
+        /// </summary>
+        public void MoveTo(Vector3 feet, float yawDegrees, float dt)
+        {
+            if (dt <= 0f) return;
+            if (_controller == null) _controller = GetComponent<CharacterController>();
+
+            transform.rotation = Quaternion.RotateTowards(
+                transform.rotation, Quaternion.Euler(0f, yawDegrees, 0f), TurnRate * dt);
+
+            // The path owns the height: gravity must not add a second, faster fall on top of it, and
+            // the old walk's velocity must not keep pushing underneath the sweep.
+            _planar = Vector3.zero;
+            _vertical = 0f;
+            if (_controller == null) return;
+
+            _controller.Move(feet - transform.position);
+        }
     }
 }

@@ -66,6 +66,7 @@ namespace Mas3D.Tests
         public IEnumerator BothHandsMeetTheirPalms()
         {
             Assert.IsTrue(_director.TryEnterAction(ActionId.Hands), "她坐在 S1 上，牵手必须能进场");
+            ActionTestDrive.ToHold(_director);   // 接触只在 Hold 里成立：先走完 2.6 s 的进场
             _director.Tick(1f / 60f);
             yield return null;
             Assert.Less(PalmGap(true), 0.02f, "左手掌心到她坐姿掌心的距离必须 ≤ 2 cm");
@@ -76,6 +77,7 @@ namespace Mas3D.Tests
         public IEnumerator TheHandsHoldForThreeSeconds()
         {
             Assert.IsTrue(_director.TryEnterAction(ActionId.Hands));
+            ActionTestDrive.ToHold(_director);   // 进场那 2.6 s 不记 Held，先走完再数这 4 s
             for (var i = 0; i < 240; i++)   // 4 s @60 fps
             {
                 _director.Tick(1f / 60f);
@@ -89,6 +91,7 @@ namespace Mas3D.Tests
         public IEnumerator TheContactDoesNotCreepWhileSheBreathes()
         {
             Assert.IsTrue(_director.TryEnterAction(ActionId.Hands));
+            ActionTestDrive.ToHold(_director);   // 量的是 Hold 里的接触，进场不掺进来
             var chest = _actor.Rig.Bone(HumanBodyBones.Chest);
             var chest0 = chest.localRotation;
             var samples = new List<Vector3>();
@@ -120,6 +123,9 @@ namespace Mas3D.Tests
             var upper = _actor.Rig.Bone(HumanBodyBones.LeftUpperArm);
             var before = upper.localRotation;
             Assert.IsTrue(_director.TryEnterAction(ActionId.Hands));
+            // IK 的权重在进场前 70% 是 0：0.5 s（2.6 s 的 19%）时她还没开始抬臂。先走到 Hold，
+            // 手臂才是满强度地被解算，才谈得上"抬起来"和"还原"。
+            ActionTestDrive.ToHold(_director);
             for (var i = 0; i < 30; i++) { _director.Tick(1f / 60f); yield return null; }
             Assert.Greater(Quaternion.Angle(before, upper.localRotation), 10f, "进场后左臂必须真的抬起来，否则 Cancel 没有东西可还原");
             _director.Cancel();

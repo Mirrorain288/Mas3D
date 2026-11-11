@@ -41,8 +41,11 @@ namespace Mas3D.Tests
                 yield return SceneFlow.LoadMain();
                 var boot = Object.FindAnyObjectByType<RoomBootstrap>();
                 yield return SceneFlow.WaitForBoot(boot);
+                // 进场是走过去的：一帧只会走几毫米。关掉 Update 的自动推钟，用测试的固定步长
+                // 把 2.6 s 走完，再量落点。
+                boot.Actions.DriveInUpdate = false;
                 Assert.IsTrue(boot.Actions.TryEnterAction(ActionId.Hands), "场景里的她坐在 S1 上，牵手必须能进场");
-                yield return null;
+                ActionTestDrive.ToHold(boot.Actions);
                 var seat = AnchorTable.Load().Seat("S1");
                 var want = new Vector3(seat.x, 0f, seat.z) + Quaternion.Euler(0f, seat.facingY, 0f) * Vector3.forward * 0.62f;
                 Assert.AreEqual(want.x, boot.Player.transform.position.x, 0.03f, "玩家必须被摆到她正前方 0.62 m");

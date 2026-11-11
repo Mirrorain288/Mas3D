@@ -47,6 +47,9 @@ namespace Mas3D.Tests
         public IEnumerator PattingHerBringsTheHandToHerHeadTop()
         {
             Assert.IsTrue(_director.TryEnterAction(ActionId.PatHer), "站在她面前 0.62 m 处伸手摸头必须能进场：" + _director.LastFaults);
+            // 接触按 Hold 的强度成立，所以先把 0.9 s 的进场走完；下面那五帧仍然是进场后的头五帧，
+            // 量的还是呼吸的外来写者去抖窗口（0.25 s）有没有把前倾拉直。
+            ActionTestDrive.ToHold(_director);
 
             // The lean has to survive the very next frames, not just the frame it was written on:
             // the breath owns Chest/Spine and its foreign-writer debounce is 0.25 s, so a breath that
@@ -68,6 +71,9 @@ namespace Mas3D.Tests
             var head = _actor.Rig.Bone(HumanBodyBones.Head);
             var before = head.localRotation;
             Assert.IsTrue(_director.TryEnterAction(ActionId.PatHer), _director.LastFaults);
+            // 头的瞄准跟着 IK 权重进场：0.9 s 的前 70% 权重还是 0，0.5 s 时头只有表里的 6°。
+            // 走到 Hold 再量，才量得到 BowHeadTo，而不是一张静态的姿势表。
+            ActionTestDrive.ToHold(_director);
             for (var i = 0; i < 30; i++) { _director.Tick(1f / 60f); yield return null; }
             // 3° alone is satisfied by the table's own Head (6,0,0) entry, so it cannot tell the aim
             // from a static table. The aim drives the head to ~39° away from the neck; anything under
@@ -102,6 +108,7 @@ namespace Mas3D.Tests
             _player.SetPosture(PlayerPosture.Crouching);
             yield return null;
             Assert.IsTrue(_director.TryEnterAction(ActionId.PatMe), _director.LastFaults);
+            ActionTestDrive.ToHold(_director);   // 接触只在 Hold 里成立
             for (var i = 0; i < 30; i++) { _director.Tick(1f / 60f); yield return null; }
             var gap = Vector3.Distance(ActionGeometry.HerPalm(_actor.Rig, false), PlayerReach.Crown(_player));
             Assert.Less(gap, 0.03f, "她的手到玩家头顶必须 ≤ 3 cm");

@@ -1307,7 +1307,17 @@ namespace Mas3D.Editor
                 // capture has no player loop, so ticking only the director leaves the idle asleep - and
                 // the idle is what writes the blink expression, so the kiss rendered with her eyes wide
                 // open. Ticking both makes the frame the one the game would show.
-                for (var step = 0; step < 90; step++)
+                // The phase clock owns the capture frame: a fixed 90 steps lands mid-entry for the two
+                // long entries (hands 2.6 s, sit-together 2.2 s), so the shot showed a half-walked pose.
+                // Walk the entry out (bounded at 10 s, which is longer than any entry), then hold 1.5 s
+                // so the frame is the pose the player actually sits in and the breath has moved.
+                var enterSteps = 0;
+                for (; enterSteps < 600 && actions.Phase != ActionPhase.Hold; enterSteps++)
+                {
+                    actions.Tick(1f / 60f);
+                    if (boot.Actor != null && boot.Actor.Idle != null) boot.Actor.Idle.Tick(1f / 60f);
+                }
+                for (var hold = 0; hold < 90; hold++)
                 {
                     actions.Tick(1f / 60f);
                     if (boot.Actor != null && boot.Actor.Idle != null) boot.Actor.Idle.Tick(1f / 60f);
@@ -1328,13 +1338,13 @@ namespace Mas3D.Editor
                 var cam = camera.transform;
                 var pivot = boot.Rig != null && boot.Rig.Pivot != null ? boot.Rig.Pivot : null;
                 var vcam = boot.Rig != null && boot.Rig.VCam != null ? boot.Rig.VCam.transform : null;
-                Debug.Log(string.Format("[act] {0} held={1:F2} gap={2:F3} cam=({3:F2},{4:F2},{5:F2}) fwd=({6:F2},{7:F2},{8:F2}) pivot={9} vcam={10} wrote={11}",
+                Debug.Log(string.Format("[act] {0} enter={12} held={1:F2} gap={2:F3} cam=({3:F2},{4:F2},{5:F2}) fwd=({6:F2},{7:F2},{8:F2}) pivot={9} vcam={10} wrote={11}",
                     id, actions.Held, actions.ContactError,
                     cam.position.x, cam.position.y, cam.position.z,
                     cam.forward.x, cam.forward.y, cam.forward.z,
                     pivot == null ? "null" : pivot.position.ToString("F2"),
                     vcam == null ? "null" : vcam.position.ToString("F2"),
-                    file));
+                    file, enterSteps));
                 // What the boom had to dodge, if anything: the kiss collapsed to a hand's width
                 // against her own capsule before the clearance sphere and the camera angle were
                 // chosen for it, and a silent collapse is invisible in a screenshot.

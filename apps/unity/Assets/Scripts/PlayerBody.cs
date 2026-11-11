@@ -159,6 +159,15 @@ namespace Mas3D
         /// Put the model where the stance says it is. The eye is the one number both the standing rig
         /// and every stance agree on (SetPosture writes Head.localPosition.y), so the body sinks by
         /// exactly the amount the eye sank — no second copy of the posture table lives here.
+        ///
+        /// The legs get no correction here. The leg tables are tuned so that a full fold lifts the
+        /// ankles by the stance's own eye drop - measured on the fitted 1.70 m body, 0.5673 m against
+        /// 0.570 crouched and 0.3352 against 0.340 kneeling, with the sit sitting over the bed on
+        /// purpose - so the soles land on the floor without a second term. That is a tuned
+        /// coincidence, not an identity: it holds only at a full fold and only while an action drives
+        /// the legs (a free-play post was never folded; the debt is recorded in ActionHotkeys).
+        /// Subtracting <see cref="Mas3D.Actions.PlayerLegs.FootLift"/> here would count the fold a
+        /// second time and bury the feet by exactly the stance drop (0.570 m crouched).
         /// </summary>
         public void ApplyNow()
         {

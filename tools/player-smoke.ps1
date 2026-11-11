@@ -8,8 +8,8 @@
 
     online (default)  The script picks a free port from 8791 upward, starts its own
                       tools/mock-bridge.mjs on it, runs the player against that port and
-                      expects exit code 0 plus six marker lines: token src, body ok,
-                      bridge ok, reply ok, action hands held, done.
+                      expects exit code 0 plus seven marker lines: token src, body ok,
+                      bridge ok, reply ok, action hands held, stage ok, done.
 
     -Offline          No bridge at all. The player must wait 45 s, write
                       "[selftest] bridge timeout" and exit 3. This proves the failure
@@ -248,6 +248,7 @@ else {
         @{ Label = 'bridge ok'; Pattern = '\[selftest\] bridge ok' },
         @{ Label = 'reply ok len='; Pattern = '\[selftest\] reply ok len=[1-9]' },
         @{ Label = 'action hands held='; Pattern = '\[selftest\] action hands held=[0-9]+\.[0-9]+ ok' },
+        @{ Label = 'stage ok'; Pattern = '\[selftest\] stage ok enter=2\.[0-9]{3} hold=[0-9]+\.[0-9]{3} leave=1\.[0-9]{3} clip=procedural' },
         @{ Label = 'body ok'; Pattern = '\[selftest\] body ok renderers=[1-9][0-9]* height=1\.(6[89]\d|7[0-1]\d|720) shader=\S+' },
         @{ Label = 'done'; Pattern = '\[selftest\] done' }
     )
