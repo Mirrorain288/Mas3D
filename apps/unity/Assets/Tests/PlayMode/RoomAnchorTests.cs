@@ -26,7 +26,14 @@ namespace Mas3D.Tests
         const float SeatedRadius = 0.22f;
 
         // The floor is walked on, not collided with; everything else must stay out of the capsule.
-        static readonly HashSet<string> Walkable = new HashSet<string>(StringComparer.Ordinal) { "Mesh_0140out" };
+        static readonly HashSet<string> Walkable = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Mesh_0140out",
+            "mesh_397.004",
+            "mesh_214",
+            "mesh_346",
+            "mesh_373",
+        };
 
         // Rugs and other flat dressing sit under the feet and are stepped over, not into:
         // the solver applies the same rule (top <= 0.06 m is ground cover, not an obstacle).

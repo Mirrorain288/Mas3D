@@ -618,7 +618,7 @@ namespace Mas3D.Editor
             // Hung a little lower than the plate (0.55 m, not 0.35): at 0.35 the inverse-square
             // falloff paints four bright streaks across the ceiling that read as lamps on show.
             var glowY = eaveY - 0.55f;
-            var spread = new[] { -0.33f, -0.11f, 0.11f, 0.33f };
+            var spread = new[] { -0.36f, -0.12f, 0.12f, 0.36f };
             for (var i = 0; i < spread.Length; i++)
             {
                 var glowGo = new GameObject("ceiling-glow-" + (i + 1));

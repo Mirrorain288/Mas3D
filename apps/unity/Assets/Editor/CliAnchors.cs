@@ -30,17 +30,17 @@ namespace Mas3D.Editor
         const float SnapRadius = 1.20f;
         const float MinAnchorSeparation = 0.60f;
 
-        const string WallMesh = "Mesh_0115out";
-        const string SkirtMesh = "Mesh_0116out";
-        const string FloorMesh = "Mesh_0140out";
-        const string BedMesh = "Mesh_0121out";
-        const string BenchMesh = "Mesh_0001out";
-        const string DeskMesh = "Mesh_0146out";
-        const string WallDeskMesh = "Mesh_0025out";
-        const string DrawerMesh = "Mesh_0138out";
-        const string MirrorMesh = "Mesh_0014out";
-        const string WindowMesh = "Mesh_0106out";
-        const string DoorMesh = "Mesh_0009out";
+        const string WallMesh = "mesh_204";
+        const string SkirtMesh = "mesh_408.001";
+        const string FloorMesh = "mesh_397.004";
+        const string BedMesh = "mesh_216";
+        const string BenchMesh = "mesh_217";
+        const string DeskMesh = "mesh_244.003";
+        const string WallDeskMesh = "mesh_416.001";
+        const string DrawerMesh = "mesh_374.002";
+        const string MirrorMesh = "mesh_373.003";
+        const string WindowMesh = "mesh_419";
+        const string DoorMesh = "mesh_521.002";
 
         class Obstacle
         {
@@ -179,7 +179,7 @@ namespace Mas3D.Editor
             foreach (var pair in byName)
             {
                 var name = pair.Key;
-                if (name == FloorMesh || name == WallMesh || name == SkirtMesh) continue;
+                if (name == FloorMesh || name == WallMesh || name == SkirtMesh || Mas3D.RoomColliders.IsShell(name)) continue;
                 var b = pair.Value;
                 if (b.max.y <= 0.06f) continue;                 // rug is walkable
                 if (b.min.y >= PlayerHeight) continue;          // above the head
@@ -293,10 +293,10 @@ namespace Mas3D.Editor
 
             if (byName.ContainsKey(WindowMesh) && byName.ContainsKey(BedMesh))
             {
-                // the window sits above the headboard, so the only standable spot with that view is
-                // the walkway beside the bed: keep the bed's x, step clear of its long side
+                // Side window sits along the lateral wall in the new bedroom; step 1.00 m inward toward the room centre.
                 var windowCentre = Centre(window);
-                roles.Add(new Role { role = "window-side", x = bed.center.x, z = bed.center.z - bed.size.z * 0.5f - 0.90f });
+                var beside = Toward(windowCentre, centre, 1.00f);
+                roles.Add(new Role { role = "window-side", x = beside.x, z = beside.y });
             }
 
             // the quietest corner: farthest interior corner from the door
@@ -377,16 +377,19 @@ namespace Mas3D.Editor
                 var facing = hasBed
                     ? Mathf.Atan2(bench.center.x - bed.center.x, bench.center.z - bed.center.z) * Mathf.Rad2Deg
                     : 180f;
+                var z = hasBed && bench.min.z - bed.max.z < CapsuleRadius
+                    ? bench.max.z - 0.105f
+                    : bench.center.z;
                 seats.Add(new Seat
                 {
                     id = "S1",
                     mesh = BenchMesh,
                     x = bench.center.x,
                     y = bench.max.y + 0.01f,
-                    z = bench.center.z,
+                    z = z,
                     topY = bench.max.y,
                     facingY = facing,
-                    note = "bench top + 0.01 m, free standing, faces away from the bed",
+                    note = "bench top + 0.01 m, seated forward on the ottoman so seated capsule clears bed mesh_216",
                 });
             }
             if (hasBed)
@@ -400,7 +403,7 @@ namespace Mas3D.Editor
                     z = bed.center.z,
                     topY = bed.max.y,
                     facingY = 0f,
-                    note = "bed bounding box top is the duvet and sits above the knee line - measure the mattress face before using it",
+                    note = "bed bounding box top is the duvet; +Z faces the bed foot and partner slot on +X",
                 });
             }
             return seats;

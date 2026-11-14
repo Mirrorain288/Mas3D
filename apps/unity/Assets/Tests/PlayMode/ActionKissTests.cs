@@ -57,8 +57,10 @@ namespace Mas3D.Tests
             Assert.IsTrue(_director.TryEnterAction(ActionId.Kiss), "跪在她面前时亲吻必须能进场");
             ActionTestDrive.ToHold(_director);   // 1.4 s 的进场走完，接触才算数
             for (var i = 0; i < 20; i++) { _director.Tick(1f / 60f); yield return null; }
-            var gap = Vector3.Distance(ActionGeometry.HerHeadCenter(_actor.Rig), PlayerReach.Face(_player));
-            Assert.Less(gap, 0.06f, "两张脸最近处必须 ≤ 6 cm");
+            var herHead = ActionGeometry.HerHeadCenter(_actor.Rig);
+            var face = PlayerReach.Face(_player);
+            var gap = Vector3.Distance(herHead, face);
+            Assert.Less(gap, 0.06f, $"两张脸最近处必须 ≤ 6 cm（herHead={herHead:F3}, face={face:F3}）");
         }
 
         [UnityTest]
@@ -117,7 +119,8 @@ namespace Mas3D.Tests
             // itself stays green when someone retunes the constant to the collapsing 0.20.
             Assert.AreEqual(0.06f, _camera.CameraRadius, 0.001f, "亲吻必须换用 0.06 m 的细避障球，否则相机球一开始就压在她身上");
             Assert.AreEqual(1.9f, _camera.Distance, 0.001f, "亲吻必须把摇臂收短到 1.9 m");
-            Assert.AreEqual(180f, _camera.Yaw, 0.01f, "亲吻的机位必须转四分之一圈到 180°，正对两人侧面");
+            var expectedOrbitYaw = Mathf.Repeat(seat.facingY + 180f + ActionDirector.KissOrbitYaw, 360f);
+            Assert.AreEqual(expectedOrbitYaw, _camera.Yaw, 0.01f, "亲吻的机位必须相对玩家朝向转四分之一圈，正对两人侧面");
             Assert.IsFalse(_camera.MouseInput, "演出期间必须收走鼠标：不然玩家动一下鼠标，这套机位当场被拖走");
 
             _director.Cancel();

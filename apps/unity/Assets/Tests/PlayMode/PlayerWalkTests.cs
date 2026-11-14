@@ -24,7 +24,14 @@ namespace Mas3D.Tests
         const float CapsuleRadius = 0.30f;
         const float PlayerHeight = 1.70f;
 
-        static readonly HashSet<string> Walkable = new HashSet<string>(StringComparer.Ordinal) { "Mesh_0140out" };
+        static readonly HashSet<string> Walkable = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Mesh_0140out",
+            "mesh_397.004",
+            "mesh_214",
+            "mesh_346",
+            "mesh_373",
+        };
 
         GameObject _room;
         GameObject _player;
@@ -192,8 +199,8 @@ namespace Mas3D.Tests
 
             // Bed footprint spans x 0.35..3.13 at z -0.98..0.93, so the straight line A2 -> A3 cuts
             // the corner. Walk around the bed's north-west corner the way a player would.
-            WalkTo(new Vector2(a2.x, a3.z), 4f, "leg 1 (north)");
-            WalkTo(new Vector2(a3.x, a3.z), 4f, "leg 2 (east)");
+            WalkTo(new Vector2(a3.x, a2.z), 4f, "leg 1 (east)");
+            WalkTo(new Vector2(a3.x, a3.z), 4f, "leg 2 (north)");
 
             var end = Flat(_player.transform.position);
             var gap = Vector2.Distance(end, new Vector2(a3.x, a3.z));
@@ -253,18 +260,18 @@ namespace Mas3D.Tests
         {
             _table = Table();
             BuildRoom();
-            var a2 = _table.Anchor("A2");
-            BuildPlayer(a2);
+            var a1 = _table.Anchor("A1");
+            BuildPlayer(a1);
             yield return null;
 
-            // Straight north from the bed foot: open floor until the far wall. The wall has to stop
-            // the capsule, which only works because RoomColliders gives the shell a second, inward
-            // facing collider (the imported box winds outward).
-            WalkTo(new Vector2(a2.x, _table.interior.z1 - 0.30f), 6f, "wall approach");
+            // Straight south from A1 along the unobstructed east corridor: the south wall has to
+            // stop the capsule, which only works because RoomColliders gives the shell a second,
+            // inward facing collider (inner-collider).
+            WalkTo(new Vector2(a1.x, _table.interior.z1 - 0.30f), 6f, "wall approach");
             var end = _player.transform.position;
             Assert.Less(end.z, _table.interior.z1 - 0.25f,
                 "player reached z=" + end.z.ToString("F2") + "; the wall did not stop it");
-            Assert.Greater(end.z, a2.z + 1.5f, "player never travelled toward the wall");
+            Assert.Greater(end.z, a1.z + 1.5f, "player never travelled toward the wall");
             Assert.Greater(end.y, -0.5f, "player fell out of the room");
             Debug.Log(string.Format("[walk-test] wall stop z={0:F2} y={1:F2}", end.z, end.y));
         }

@@ -18,9 +18,9 @@ namespace Mas3D
         const float PalmSideways = 0.22f;
         const float PalmDrop = 0.62f;
 
-        const float RaisedForward = 0.30f;
-        const float RaisedSideways = 0.12f;
-        const float RaisedDrop = 0.32f;
+        const float RaisedForward = 0.50f;
+        const float RaisedSideways = 0.10f;
+        const float RaisedDrop = 0.50f;
 
         const float CrownLift = 0.16f;
 

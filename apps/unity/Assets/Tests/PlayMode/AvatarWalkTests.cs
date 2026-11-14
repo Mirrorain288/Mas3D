@@ -30,7 +30,14 @@ namespace Mas3D.Tests
         const float SweepStep = 0.05f;
         const float TickSeconds = 1f / 60f;
 
-        static readonly HashSet<string> Walkable = new HashSet<string>(new[] { "Mesh_0140out" });
+        static readonly HashSet<string> Walkable = new HashSet<string>(new[]
+        {
+            "Mesh_0140out",
+            "mesh_397.004",
+            "mesh_214",
+            "mesh_346",
+            "mesh_373",
+        });
 
         AvatarActor _actor;
         AvatarWalker _walker;
@@ -525,8 +532,8 @@ namespace Mas3D.Tests
         public IEnumerator ADisabledMidWalkComesBackOffTheGraph()
         {
             Assert.IsTrue(_walker.GoTo("A5"), _walker.LastFaults);
-            for (var i = 0; i < 60; i++) _walker.Tick(TickSeconds);
-            Assert.IsTrue(_walker.Walking, "跑满一秒该还走在 A2-A5 中间");
+            for (var i = 0; i < 90; i++) _walker.Tick(TickSeconds);
+            Assert.IsTrue(_walker.Walking, "跑满 1.5 秒该还走在 A2-A5 中间");
             Assert.IsNotNull(_walker.Target, "走位途中该有目标");
             var paused = _actor.transform.position;
 
@@ -586,14 +593,14 @@ namespace Mas3D.Tests
             Collider floor = null;
             foreach (var candidate in _room.GetComponentsInChildren<Collider>(true))
             {
-                if (candidate.gameObject.name == "Mesh_0181out") shelf = candidate;
+                if (candidate.gameObject.name == "mesh_354") shelf = candidate;
                 if (floor == null && candidate.bounds.size.y <= 0.07f && candidate.bounds.min.y <= 0.07f)
                 {
                     floor = candidate;
                 }
             }
 
-            Assert.IsNotNull(shelf, "房间里该有那块悬空的矮件 Mesh_0181out");
+            Assert.IsNotNull(shelf, "房间里该有那块悬空的矮件 mesh_354");
             Assert.Less(shelf.bounds.size.y, 0.07f, "它必须真的薄，否则证明不了旧规则的口子");
             Assert.Greater(shelf.bounds.min.y, 0.07f, "它必须真的悬空，否则豁免它本来就是对的");
             Assert.IsFalse(SkinnedRoomPart(shelf), "薄但悬空的件不是地面，不许豁免");

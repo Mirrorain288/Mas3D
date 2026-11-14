@@ -166,44 +166,35 @@ namespace Mas3D.Actions
         public static readonly IReadOnlyDictionary<HumanBodyBones, Vector3> PatHer =
             new Dictionary<HumanBodyBones, Vector3>
             {
-                { HumanBodyBones.Spine, new Vector3(24f, 0f, 0f) },
-                { HumanBodyBones.Chest, new Vector3(12f, 0f, 0f) },
-                { HumanBodyBones.Neck, new Vector3(16f, 0f, 0f) },
+                { HumanBodyBones.Spine, new Vector3(10f, 0f, 0f) },
+                { HumanBodyBones.Chest, new Vector3(5f, 0f, 0f) },
+                { HumanBodyBones.Neck, new Vector3(8f, 0f, 0f) },
                 { HumanBodyBones.Head, new Vector3(6f, 0f, 0f) },
             };
 
         /// <summary>
-        /// Kiss: she bows her whole torso onto the kneeling player's face. The four spine keys add up
-        /// to 54 degrees of forward pitch, inside the plan's 30-60 range; the bow is deliberately
-        /// weighted toward Neck 20 / Head 14 rather than a deep waist fold, because a person lowers
-        /// her head to be kissed. Nothing here chases the contact: the marker distance
-        /// (<see cref="ActionDirector.KissOffset"/>) places the player, and the gap and the face
-        /// alignment are then measured, not posed away.
+        /// Kiss: calibrated for the low 0.338 m S1 ottoman. She leans gently forward while tilting
+        /// her chin up toward the kneeling player's lowered eye level, keeping face alignment tight.
         /// </summary>
         public static readonly IReadOnlyDictionary<HumanBodyBones, Vector3> Kiss =
             new Dictionary<HumanBodyBones, Vector3>
             {
-                { HumanBodyBones.Spine, new Vector3(13f, 0f, 0f) },
-                { HumanBodyBones.Chest, new Vector3(7f, 0f, 0f) },
-                { HumanBodyBones.Neck, new Vector3(20f, 0f, 0f) },
-                { HumanBodyBones.Head, new Vector3(14f, 0f, 0f) },
+                { HumanBodyBones.Spine, new Vector3(6f, 0f, 0f) },
+                { HumanBodyBones.Chest, new Vector3(6f, 0f, 0f) },
+                { HumanBodyBones.Neck, new Vector3(0f, 0f, 0f) },
+                { HumanBodyBones.Head, new Vector3(-12f, 0f, 0f) },
                 { HumanBodyBones.LeftUpperArm, new Vector3(0f, 0f, 34f) },
                 { HumanBodyBones.RightUpperArm, new Vector3(0f, 0f, -34f) },
             };
 
         /// <summary>
-        /// Pat-me: her right arm comes up in front of her to find the crouched player's crown. The
-        /// contact itself is left to <see cref="TwoBoneIk"/> — these angles only put the chain in the
-        /// right quadrant before the solve, and the left arm is deliberately absent so it keeps its
-        /// baseline (the free arm must not join in). Spine and Chest lean her whole torso in: at the
-        /// 0.62 m marker an upright shoulder leaves that crown 0.5678 m out, past her 0.4708 m arm,
-        /// and the lean brings it to 0.4383 m. Drop the two torso keys and pat-me stops reaching.
+        /// Pat-me: her right arm comes up in front of her to find the crouched player's crown.
         /// </summary>
         public static readonly IReadOnlyDictionary<HumanBodyBones, Vector3> PatMe =
             new Dictionary<HumanBodyBones, Vector3>
             {
-                { HumanBodyBones.Spine, new Vector3(20f, 0f, 0f) },
-                { HumanBodyBones.Chest, new Vector3(10f, 0f, 0f) },
+                { HumanBodyBones.Spine, new Vector3(14f, 0f, 0f) },
+                { HumanBodyBones.Chest, new Vector3(7f, 0f, 0f) },
                 { HumanBodyBones.RightUpperArm, new Vector3(0f, 0f, -64f) },
                 { HumanBodyBones.RightLowerArm, new Vector3(0f, -24f, 0f) },
             };

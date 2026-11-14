@@ -78,7 +78,7 @@ namespace Mas3D.Tests
             var want = new Vector3(seat.x, 0f, seat.z) + Quaternion.Euler(0f, seat.facingY, 0f) * Vector3.forward * 0.62f;
             Assert.AreEqual(want.x, _player.transform.position.x, 0.02f, "玩家必须被摆到她正前方 0.62 m");
             Assert.AreEqual(want.z, _player.transform.position.z, 0.02f, "x/z 都要对上");
-            Assert.AreEqual(90f, _player.transform.eulerAngles.y, 1f, "玩家必须面向她（她朝 -X，所以玩家朝 +X）");
+            Assert.AreEqual(Mathf.Repeat(seat.facingY + 180f, 360f), _player.transform.eulerAngles.y, 1f, "玩家必须面向她");
             var held = _director.Held;
             _director.Tick(0.5f);
             Assert.AreEqual(held + 0.5f, _director.Held, 1e-4f, "Tick 必须把时间记进 Held");

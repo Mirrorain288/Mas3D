@@ -153,8 +153,9 @@ namespace Mas3D.Tests
             var rig = d.Body.Avatar;
             var hips = rig.Bone(HumanBodyBones.Hips).position;
             var foot = rig.Bone(HumanBodyBones.LeftFoot).position;
-            Assert.Less(Mathf.Abs(foot.x - hips.x), 0.10f, "the foot drifted sideways");
-            Assert.Greater(foot.z - hips.z, 0f, "the toe points forward, not through the shin");
+            var delta = foot - hips;
+            Assert.Less(Mathf.Abs(Vector3.Dot(delta, d.Player.transform.right)), 0.10f, "the foot drifted sideways");
+            Assert.Greater(Vector3.Dot(delta, d.Player.transform.forward), 0f, "the toe points forward, not through the shin");
         }
 
         /// <summary>

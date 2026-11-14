@@ -61,8 +61,9 @@ namespace Mas3D.Tests
 
             for (var i = 0; i < 25; i++) { _director.Tick(1f / 60f); yield return null; }
             var raised = PlayerReach.Raised(_player, false);
-            var gap = Vector3.Distance(raised, ActionGeometry.HerHeadTop(_actor.Rig));
-            Assert.Less(gap, 0.03f, "玩家指尖到她头顶必须 ≤ 3 cm（她可以低头凑过来）");
+            var headTop = ActionGeometry.HerHeadTop(_actor.Rig);
+            var gap = Vector3.Distance(raised, headTop);
+            Assert.Less(gap, 0.03f, $"玩家指尖到她头顶必须 ≤ 3 cm（raised={raised:F3}, headTop={headTop:F3}）");
         }
 
         [UnityTest]

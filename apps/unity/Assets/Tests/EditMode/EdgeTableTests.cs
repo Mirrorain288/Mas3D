@@ -80,10 +80,10 @@ namespace Mas3D.Tests
                     "座 " + id + " 的站立点至少离座 " + EdgeTable.SeatStandGap.ToString("F2") + " m");
             }
 
-            // The bench faces the aisle: one step forward is floor. The bed's facing runs along the
-            // mattress, so it is the one seat she has to leave backwards, off the foot of the bed.
+            // Both seats face the aisle (+Z) in the calibrated bedroom: the bench steps one short pace
+            // forward into the aisle, while the bed leaves forward past the bed foot and bench.
             Assert.AreEqual(EdgeTable.SeatStandGap, Along("S1"), 1e-3f, "长凳前方就是过道，该往前一步起身");
-            Assert.Less(Along("S2"), 0f, "S2 是床，站立点在床尾一侧；往前一步会站在床面上");
+            Assert.Greater(Along("S2"), EdgeTable.SeatStandGap, "S2 是床，站立点应在床尾前方过道上");
         }
 
         static float Along(string seatId)

@@ -19,9 +19,14 @@ namespace Mas3D
         // prefix rule below covers every import without another table to maintain.
         static readonly HashSet<string> Shell = new HashSet<string>
         {
-            "Mesh_0115out", // walls
-            "Mesh_0116out", // roof skirt
-            "Mesh_0140out", // floor
+            "Mesh_0115out", // legacy walls
+            "Mesh_0116out", // legacy roof skirt
+            "Mesh_0140out", // legacy floor
+            "mesh_204",     // bedroom pink walls
+            "mesh_231.002", // bedroom upper white walls & ceiling
+            "mesh_397.004", // bedroom floor
+            "mesh_408.001", // bedroom perimeter beams / skirt
+            "mesh_405.004", // bedroom perimeter wall rail
         };
 
         static readonly string[] ShellPrefixes = { "Floor", "Wall", "Ceiling", "Roof", "Ground" };

@@ -44,25 +44,19 @@ namespace Mas3D.Actions
         /// shoulder that lean produces, not the upright one: 0.4383 m shoulder-to-crown, and the palm
         /// lands on the crown with 0.0000 m to spare.
         /// </summary>
-        public const float PatMeOffset = 0.62f;
+        public const float PatMeOffset = 0.40f;
 
         /// <summary>
-        /// Distance in front of her seat where the player kneels for the kiss. 0.31 m is what the scan
-        /// answered: with the 54-degree <see cref="ActionPoses.Kiss"/> bow her head centre sits
-        /// 0.0134 m from his face and 3.6 degrees off his gaze, so the contact the hold needs is
-        /// there; at 0.34 the gap is 1.8 cm and the hold never credits, and at 0.30 the faces have
-        /// already crossed (1.2 cm apart, but her gaze runs 50 degrees past his face).
-        /// <para>
-        /// The kneeling capsule (radius 0.30) therefore reaches x = 0.095 and overlaps the bench mesh
-        /// Mesh_0001out (AABB from x = -0.189) by 0.284 m. That overlap is approved for the kiss:
-        /// two faces have to meet at one point and no stance reaches it from further out. None of it
-        /// is on screen in first person — the camera sits at the kneeling eye 1.28, well above the
-        /// 0.604 m seat top, and the player has no body mesh. The one line kept is that the kneeling
-        /// eye must stay above seat top + 0.40 m (1.28 > 1.004), or the near plane would look into
-        /// the cushion; <c>ActionKissTests</c> asserts it.
-        /// </para>
+        /// Distance in front of her seat where the player kneels for the kiss, paired with
+        /// <see cref="KissEyeHeight"/> for the 0.338 m S1 ottoman.
         /// </summary>
-        public const float KissOffset = 0.31f;
+        public const float KissOffset = 0.157f;
+
+        /// <summary>
+        /// Lowered eye height used while kissing her on the 0.338 m ottoman so the player's face
+        /// proxy and camera dip from 1.28 m to meet her seated head level.
+        /// </summary>
+        public const float KissEyeHeight = 1.092f;
 
         /// <summary>
         /// The bed slot in anchors.json. S2 is the mattress centre line (x 1.741, z -0.025, topY 0.906):
@@ -303,6 +297,8 @@ namespace Mas3D.Actions
             {
                 LastSpot = plan.Spot;
                 Player.SetPosture(plan.Posture, plan.SeatTopY);
+                if (id == ActionId.Kiss && Player.Head != null)
+                    Player.Head.localPosition = new Vector3(0f, KissEyeHeight, 0f);
 
                 // Settle and approach are different verbs. A settle (the kiss, the two of them on
                 // the bed) has to be on its mark on frame one: the shot is framed from there and

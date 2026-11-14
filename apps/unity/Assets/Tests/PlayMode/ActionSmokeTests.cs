@@ -34,6 +34,10 @@ namespace Mas3D.Tests
 
                 var director = boot.Actions;
                 var player = boot.Player;
+                // Wait for SpawnLift (0.10 m) to settle onto the floor collider and hold one grounded
+                // frame before recording spawn so frame-dt jitter does not leak into Cancel() distance.
+                for (var i = 0; i < 30 && !player.Grounded; i++) yield return null;
+                yield return null;
                 var spawn = player.transform.position;
                 director.DriveInUpdate = false;   // 手动 Tick：Update 也推一次会让 1.5 s 变成 3 s
 

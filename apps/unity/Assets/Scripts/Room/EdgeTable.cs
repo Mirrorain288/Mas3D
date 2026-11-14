@@ -92,7 +92,7 @@ namespace Mas3D.Room
             new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase)
             {
                 { "S1", SeatStandGap },
-                { "S2", -1.30f },
+                { "S2", 2.80f },
             };
 
         /// <summary>The floor the avatar root stands on. Everything in this room is 0.02 above the rug.</summary>
@@ -101,26 +101,27 @@ namespace Mas3D.Room
         static readonly string[] AnchorIds = { "A1", "A2", "A3", "A4", "A5" };
         static readonly string[] SeatIds = { "S1", "S2" };
 
-        /// <summary>The two corners around the bed. Both pairs are edges, not nodes she can be sent to by name.</summary>
-        static readonly Vector3 CornerW1 = new Vector3(-0.40f, FeetHeight, -1.40f);
-        static readonly Vector3 CornerW2 = new Vector3(-0.55f, FeetHeight, 1.25f);
+        /// <summary>Waypoints on the open south-west and south-east floor of the calibrated bedroom.</summary>
+        static readonly Vector3 CornerW1 = new Vector3(-0.75f, FeetHeight, 0.55f);
+        static readonly Vector3 CornerW2 = new Vector3(1.00f, FeetHeight, 1.70f);
 
         /// <summary>
-        /// Undirected connectivity. A4 and S2 hang off A1 because the wardrobe and the mirror between
-        /// them leave no corridor of their own; that is also why S2 has exactly one way in.
+        /// Undirected connectivity calibrated to the new bedroom layout, keeping 0.30 m capsule
+        /// clearance around the bed, bench, dresser, and south floating shelf.
         /// </summary>
         static readonly string[,] Links =
         {
             { "S1", "A2" },
-            { "A2", "W2" },
-            { "W2", "A3" },
-            { "A2", "A5" },
-            { "A5", "A3" },
             { "A2", "W1" },
-            { "W1", "A1" },
-            { "A1", "A4" },
-            { "A1", "S2" },
-            { "S2", "A4" },
+            { "W1", "A5" },
+            { "A2", "A5" },
+            { "A2", "W2" },
+            { "W2", "A5" },
+            { "W2", "A3" },
+            { "A3", "A4" },
+            { "A3", "A1" },
+            { "S2", "W2" },
+            { "S2", "A5" },
         };
 
         static List<WalkNode> _nodes;

@@ -19,7 +19,7 @@ namespace Mas3D.Tests
     public class AvatarSeatTests
     {
         const string RoomPath = "Assets/_Local/room/mita-room.glb";
-        const string BenchName = "Mesh_0001out";
+        const string BenchName = "mesh_217";
 
         AvatarRig _rig;
         GameObject _room;
@@ -302,7 +302,7 @@ namespace Mas3D.Tests
             seat.Rig = _rig;
             seat.Sit(s1);
             yield return null;
-            seat.Stand(new Vector3(0.105f, 0f, -0.024f), s1.facingY);
+            seat.Stand(new Vector3(0.002f, 0f, 0.638f), s1.facingY);
             yield return null;
 
             Assert.AreEqual(standingHips, _rig.Bone(HumanBodyBones.Hips).position.y, 0.01f, "站起来没恢复");
