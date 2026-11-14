@@ -4,6 +4,7 @@ using Mas3D.Avatar;
 using Mas3D.Boot;
 using Mas3D.Conversation;
 using Mas3D.Net;
+using Mas3D.Room;
 using Mas3D.UI;
 using Mas3D.Voice;
 using UnityEngine;
@@ -31,11 +32,11 @@ namespace Mas3D
         /// </summary>
         public GameObject FlatRoom;
 
-        /// <summary>Feet position for the apartment, in its own (floor-centred) coordinates.</summary>
-        public Vector3 FlatSpawn = new Vector3(-3.15f, 0.10f, 0.20f);
+        /// <summary>Feet position for the apartment, in its own (1.5x scaled, floor-centred) coordinates.</summary>
+        public Vector3 FlatSpawn = new Vector3(-4.725f, 0.10f, 0.30f);
 
-        /// <summary>Eye height used for the flat's capture cameras (its ceilings are 1.77 m).</summary>
-        public const float FlatEye = 1.42f;
+        /// <summary>Eye height used for the flat's capture cameras (1.5x scaled ceilings are ~2.655 m).</summary>
+        public const float FlatEye = 2.13f;
 
         /// <summary>Degrees around Y. +x runs from the bedroom through the living room to the kitchen.</summary>
         public float FlatYaw = 90f;
@@ -99,6 +100,12 @@ namespace Mas3D
         /// 由 <see cref="ActionDirector.TryEnterAction"/> 决定。
         /// </summary>
         public ActionHotkeys Hotkeys;
+
+        /// <summary>
+        /// 室内门交互（F 键与非 UI 左键点门开关），仅在当前激活房间内存在 <see cref="InteractiveDoor"/>
+        /// 时按需挂在 Input 物体上；默认单间卧室没有门，因此不建组件也不触发提示。
+        /// </summary>
+        public DoorInteractor Doors;
 
         // The imported floor sits at y = 0.04; spawning exactly on it leaves the capsule
         // penetrating, and a penetrating CharacterController never reports itself grounded.
@@ -277,6 +284,18 @@ namespace Mas3D
                 if (Hotkeys == null) Hotkeys = inputGo.AddComponent<ActionHotkeys>();
             }
             Hotkeys.Bind(Actions, Player, dialoguePanel, Anchors);
+
+            var activeDoors = InteractiveDoor.FindActive(Room);
+            if (activeDoors.Length > 0)
+            {
+                if (Doors == null)
+                {
+                    var inputGo = Modes.gameObject;
+                    Doors = inputGo.GetComponent<DoorInteractor>();
+                    if (Doors == null) Doors = inputGo.AddComponent<DoorInteractor>();
+                }
+                Doors.Bind(Player, Rig, Actions, dialoguePanel, activeDoors);
+            }
 
             Debug.Log($"[room] colliders={ColliderCount} spawn={(houseMode ? "house" : anchor != null ? anchor.id : "none")} at={(houseMode ? HouseSpawn.x.ToString("F2") + "," + HouseSpawn.z.ToString("F2") : anchor != null ? anchor.x.ToString("F2") + "," + anchor.z.ToString("F2") : "-")}");
 

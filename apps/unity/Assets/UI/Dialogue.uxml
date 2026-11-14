@@ -26,4 +26,5 @@
             <ui:Button name="send" text="发送" class="send" />
         </ui:VisualElement>
     </ui:VisualElement>
+    <ui:Label name="door-prompt" text="" class="door-prompt" picking-mode="Ignore" style="display: none;" />
 </ui:UXML>

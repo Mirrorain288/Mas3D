@@ -172,3 +172,21 @@
     color: rgb(255, 255, 255);
     font-size: 12px;
 }
+
+/* 屏幕底部中央：室内门交互提示（不拦截点击，默认隐藏） */
+.door-prompt {
+    position: absolute;
+    bottom: 36px;
+    align-self: center;
+    padding-left: 14px;
+    padding-right: 14px;
+    padding-top: 6px;
+    padding-bottom: 6px;
+    border-radius: 14px;
+    border-width: 1px;
+    border-color: rgba(255, 255, 255, 0.22);
+    background-color: rgba(20, 18, 28, 0.78);
+    color: rgb(245, 240, 250);
+    font-size: 13px;
+    -unity-text-align: middle-center;
+}

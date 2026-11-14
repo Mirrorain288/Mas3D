@@ -152,6 +152,17 @@ namespace Mas3D.Editor
             actor.FitBody();
             Debug.Log(string.Format("[player] actor parked at rest on A5 ({0:F2}, {1:F2}), seats herself on {2}", park.x, park.z, actor.SeatId));
 
+            if (AssetDatabase.LoadAssetAtPath<GameObject>(CliFlat.Output) != null)
+            {
+                if (!CliFlat.WireIntoScene(scene))
+                {
+                    Debug.LogError("[player] failed to wire Flat.prefab into Main.unity");
+                    EditorApplication.Exit(1);
+                    return;
+                }
+                Debug.Log("[player] wired FlatRoom into Main.unity (inactive)");
+            }
+
             EditorSceneManager.MarkSceneDirty(scene);
             EditorSceneManager.SaveScene(scene, ScenePath);
             EditorBuildSettings.scenes = new[] { new EditorBuildSettingsScene(ScenePath, true) };

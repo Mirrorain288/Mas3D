@@ -259,6 +259,42 @@ namespace Mas3D.Tests
             }
         }
 
+        [UnityTest]
+        public System.Collections.IEnumerator DoorPromptShowsAndHidesWithoutAffectingLogText()
+        {
+            var harness = DialoguePanelHarness.Create();
+            try
+            {
+                yield return null;
+
+                var root = harness.Document.rootVisualElement;
+                var prompt = root.Q<Label>("door-prompt");
+                Assert.IsNotNull(prompt, "Dialogue.uxml 必须包含 #door-prompt");
+                Assert.AreEqual(PickingMode.Ignore, prompt.pickingMode, "#door-prompt 不应拦截鼠标点击");
+                Assert.AreEqual(DisplayStyle.None, prompt.style.display.value, "#door-prompt 初始必须隐藏");
+                Assert.AreEqual(string.Empty, harness.Panel.DoorPromptText);
+
+                var beforeLog = harness.Panel.LogText;
+                harness.Panel.ShowDoorPrompt("按 F 开门");
+                Assert.AreEqual("按 F 开门", harness.Panel.DoorPromptText);
+                Assert.AreEqual("按 F 开门", prompt.text);
+                Assert.AreEqual(DisplayStyle.Flex, prompt.style.display.value);
+                Assert.AreEqual(beforeLog, harness.Panel.LogText, "门交互提示不能污染对话历史 LogText");
+
+                harness.Panel.ShowDoorPrompt("按 F 关门");
+                Assert.AreEqual("按 F 关门", prompt.text);
+                Assert.AreEqual(DisplayStyle.Flex, prompt.style.display.value);
+
+                harness.Panel.ShowDoorPrompt(string.Empty);
+                Assert.AreEqual(string.Empty, harness.Panel.DoorPromptText);
+                Assert.AreEqual(DisplayStyle.None, prompt.style.display.value);
+            }
+            finally
+            {
+                harness.Dispose();
+            }
+        }
+
         static int CountLabels(VisualElement root, string text)
         {
             var labels = root.Query<Label>().ToList();

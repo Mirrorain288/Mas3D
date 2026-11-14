@@ -1,4 +1,5 @@
 using System.IO;
+using Mas3D.Room;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -7,17 +8,19 @@ namespace Mas3D.Editor
 {
     /// <summary>
     /// Bakes the whole-apartment export (帽子米塔的房间.blend, rooms 卧室/客厅/餐厅/浴室/柜子) into one
-    /// prefab: the .glb is a single connected flat, so unlike CliHouse there is nothing to assemble —
-    /// only colliders, room lighting and a saved prefab.
+    /// prefab: scales uniformly by <see cref="FlatScale"/>, reorganizes the three interior doors around
+    /// their +Z hinges with <see cref="InteractiveDoor"/>, attaches persistent double-sided colliders and lighting.
     /// </summary>
     public static class CliFlat
     {
         public const string Source = "Assets/_Local/room/mita-flat.glb";
         public const string Output = "Assets/_Local/room/Flat.prefab";
+        public const float FlatScale = 1.5f;
         const string ScenePath = "Assets/Scenes/Main.unity";
 
         public static void Bake()
         {
+            Flipped.Clear();
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             var prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>(Source);
             if (prefabAsset == null)
@@ -28,10 +31,14 @@ namespace Mas3D.Editor
             }
 
             var room = (GameObject)PrefabUtility.InstantiatePrefab(prefabAsset);
+            if (PrefabUtility.IsPartOfPrefabInstance(room))
+            {
+                PrefabUtility.UnpackPrefabInstance(room, PrefabUnpackMode.Completely, InteractionMode.AutomatedAction);
+            }
             room.name = "Flat";
 
-            // Sit the floor on y = 0 and centre the footprint on the origin, so spawn points and lamp
-            // positions below are written in a predictable frame.
+            // Sit the floor on y = 0 and centre the footprint on the origin, then scale uniformly by
+            // FlatScale so doorways (~0.915 m x 1.95 m) and ceilings (~2.655 m) fit the standing player.
             var bounds = Measure(room);
 
             // The export carries window/backdrop planes well below the rooms, so bounds.min.y is not
@@ -39,11 +46,23 @@ namespace Mas3D.Editor
             var floorY = DominantFloorY(room);
             var shift = new Vector3(-bounds.center.x, -floorY, -bounds.center.z);
 
-            // Offset the children, not the root: the root stays at the origin so a saved prefab keeps
-            // its frame, and spawn/lamp coordinates below are plain world coordinates.
-            foreach (Transform child in room.transform) child.position += shift;
+            // Offset and scale the children, not the root: the root stays at the origin with unit scale
+            // so pivot local rotations and spawn coordinates stay in plain world metres.
+            foreach (Transform child in room.transform)
+            {
+                child.position = (child.position + shift) * FlatScale;
+                child.localScale *= FlatScale;
+            }
             bounds = Measure(room);
-            Debug.Log($"[flat] bounds center={bounds.center} size={bounds.size}");
+            Debug.Log($"[flat] bounds center={bounds.center} size={bounds.size} scale={FlatScale:F2}");
+
+            var doorCount = SetupDoors(room);
+            if (doorCount != InteractiveDoor.InteriorSpecs.Length)
+            {
+                Debug.LogError($"[flat] expected {InteractiveDoor.InteriorSpecs.Length} interior doors, built {doorCount}");
+                EditorApplication.Exit(1);
+                return;
+            }
 
             var colliders = AttachColliders(room);
             var lamps = Light(room, bounds);
@@ -52,9 +71,112 @@ namespace Mas3D.Editor
 
             var dir = Path.GetDirectoryName(Output);
             if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
-            PrefabUtility.SaveAsPrefabAsset(room, Output);
-            Debug.Log($"[flat] baked {Output} colliders={colliders} lamps={lamps} bounds={bounds.size}");
+            if (!SavePrefabWithFlippedSubAssets(room))
+            {
+                EditorApplication.Exit(1);
+                return;
+            }
+            Debug.Log($"[flat] baked {Output} doors={doorCount} colliders={colliders} lamps={lamps} bounds={bounds.size}");
             EditorApplication.Exit(0);
+        }
+
+        static int SetupDoors(GameObject room)
+        {
+            var created = 0;
+            for (var i = 0; i < InteractiveDoor.InteriorSpecs.Length; i++)
+            {
+                var spec = InteractiveDoor.InteriorSpecs[i];
+                var leaf = FindChildRecursive(room.transform, spec.LeafMesh);
+                var handle = FindChildRecursive(room.transform, spec.HandleMesh);
+                if (leaf == null || handle == null)
+                {
+                    Debug.LogError($"[flat] missing mesh for {spec.PivotName}: leaf={spec.LeafMesh} ({leaf != null}) handle={spec.HandleMesh} ({handle != null})");
+                    return created;
+                }
+
+                var leafBounds = Measure(leaf.gameObject);
+                var hingePos = new Vector3(leafBounds.center.x, leafBounds.min.y, leafBounds.max.z);
+
+                var pivot = new GameObject(spec.PivotName);
+                pivot.transform.SetParent(room.transform, false);
+                pivot.transform.position = hingePos;
+                pivot.transform.localRotation = Quaternion.identity;
+                pivot.transform.localScale = Vector3.one;
+
+                leaf.SetParent(pivot.transform, true);
+                handle.SetParent(pivot.transform, true);
+
+                var door = pivot.AddComponent<InteractiveDoor>();
+                door.DoorId = spec.PivotName;
+                door.SwingAngle = spec.SwingAngle;
+                door.SwingDuration = InteractiveDoor.DefaultSwingDuration;
+
+                Debug.Log($"[flat] door {spec.PivotName} hinge={hingePos} leafSize={leafBounds.size}");
+                created++;
+            }
+            return created;
+        }
+
+        static Transform FindChildRecursive(Transform root, string targetName)
+        {
+            if (root == null) return null;
+            if (string.Equals(root.name, targetName, System.StringComparison.Ordinal)) return root;
+            for (var i = 0; i < root.childCount; i++)
+            {
+                var hit = FindChildRecursive(root.GetChild(i), targetName);
+                if (hit != null) return hit;
+            }
+            return null;
+        }
+
+        static bool SavePrefabWithFlippedSubAssets(GameObject room)
+        {
+            // Persist flipped (inner) meshes as sub-assets inside Flat.prefab so MeshColliders survive reload.
+            PrefabUtility.SaveAsPrefabAsset(room, Output);
+            foreach (var mesh in Flipped.Values)
+            {
+                if (mesh != null && string.IsNullOrEmpty(AssetDatabase.GetAssetPath(mesh)))
+                {
+                    AssetDatabase.AddObjectToAsset(mesh, Output);
+                }
+            }
+            AssetDatabase.SaveAssets();
+            PrefabUtility.SaveAsPrefabAsset(room, Output);
+            AssetDatabase.SaveAssets();
+
+            var reloaded = AssetDatabase.LoadAssetAtPath<GameObject>(Output);
+            if (reloaded == null)
+            {
+                Debug.LogError("[flat] failed to reload baked prefab: " + Output);
+                return false;
+            }
+            var nullColliders = 0;
+            foreach (var mc in reloaded.GetComponentsInChildren<MeshCollider>(true))
+            {
+                if (mc.sharedMesh == null) nullColliders++;
+            }
+            if (nullColliders > 0)
+            {
+                Debug.LogError($"[flat] {nullColliders} MeshCollider(s) in {Output} have null sharedMesh after save");
+                return false;
+            }
+            var doors = reloaded.GetComponentsInChildren<InteractiveDoor>(true);
+            if (doors.Length != InteractiveDoor.InteriorSpecs.Length)
+            {
+                Debug.LogError($"[flat] expected {InteractiveDoor.InteriorSpecs.Length} InteractiveDoor(s) in {Output}, found {doors.Length}");
+                return false;
+            }
+            foreach (var door in doors)
+            {
+                var doorRenderers = door.GetComponentsInChildren<Renderer>(true).Length;
+                var doorColliders = door.GetComponentsInChildren<MeshCollider>(true).Length;
+                if (doorRenderers < 2 || doorColliders < 4)
+                {
+                    Debug.LogError($"[flat] {door.DoorId} missing children after save: renderers={doorRenderers} colliders={doorColliders}");
+                    return false;
+                }
+            }
+            return true;
         }
 
         /// <summary>
@@ -120,26 +242,27 @@ namespace Mas3D.Editor
 
             var warm = new Color(1f, 0.85f, 0.7f);
             const int lamps = 5;
-            var inner = bounds.size.x - 2.4f;
+            var margin = 1.2f * FlatScale;
+            var inner = bounds.size.x - margin * 2f;
             for (var i = 0; i < lamps; i++)
             {
                 var t = lamps == 1 ? 0.5f : i / (float)(lamps - 1);
-                var x = bounds.min.x + 1.2f + inner * t;
+                var x = bounds.min.x + margin + inner * t;
                 var go = new GameObject("flat-lamp-" + (i + 1));
                 go.transform.SetParent(holder.transform, false);
-                // Ceilings in this flat sit at 1.77 m; lamps placed above them light nothing.
-                go.transform.position = new Vector3(x, 1.40f, bounds.center.z);
+                // 1.5x scaled ceilings sit near 2.655 m; lamps placed below them illuminate all rooms.
+                go.transform.position = new Vector3(x, 1.40f * FlatScale, bounds.center.z);
                 var light = go.AddComponent<Light>();
                 light.type = LightType.Point;
                 light.color = warm;
                 light.intensity = 2.1f;
-                light.range = 7.5f;
+                light.range = 7.5f * FlatScale;
                 light.shadows = LightShadows.None;
             }
 
             var moonGo = new GameObject("flat-moon");
             moonGo.transform.SetParent(holder.transform, false);
-            moonGo.transform.position = new Vector3(bounds.center.x, 6f, bounds.min.z - 4f);
+            moonGo.transform.position = new Vector3(bounds.center.x, 6f * FlatScale, bounds.min.z - 4f * FlatScale);
             moonGo.transform.rotation = Quaternion.Euler(26f, 0f, 0f);
             var moon = moonGo.AddComponent<Light>();
             moon.type = LightType.Directional;
@@ -160,9 +283,26 @@ namespace Mas3D.Editor
             var scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
             if (!scene.IsValid()) { Debug.LogError("[flat] cannot open " + ScenePath); EditorApplication.Exit(1); return; }
 
+            if (!WireIntoScene(scene))
+            {
+                Debug.LogError("[flat] missing bootstrap or prefab");
+                EditorApplication.Exit(1);
+                return;
+            }
+
+            EditorSceneManager.MarkSceneDirty(scene);
+            EditorSceneManager.SaveScene(scene);
+            var boot = Object.FindAnyObjectByType<RoomBootstrap>();
+            Debug.Log($"[flat] wired {Output} into Main.unity spawn={boot.FlatSpawn}");
+            EditorApplication.Exit(0);
+        }
+
+        public static bool WireIntoScene(UnityEngine.SceneManagement.Scene scene)
+        {
+            if (!scene.IsValid()) return false;
             var boot = Object.FindAnyObjectByType<RoomBootstrap>();
             var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(Output);
-            if (boot == null || prefab == null) { Debug.LogError("[flat] missing bootstrap or prefab"); EditorApplication.Exit(1); return; }
+            if (boot == null || prefab == null) return false;
 
             if (boot.FlatRoom != null) Object.DestroyImmediate(boot.FlatRoom);
             var go = (GameObject)PrefabUtility.InstantiatePrefab(prefab);
@@ -170,13 +310,10 @@ namespace Mas3D.Editor
             go.transform.position = Vector3.zero;
             go.SetActive(false);
             boot.FlatRoom = go;
-            boot.FlatSpawn = new Vector3(-3.15f, 0.10f, 0.20f);
+            boot.FlatSpawn = new Vector3(-3.15f * FlatScale, 0.10f, 0.20f * FlatScale);
             boot.FlatYaw = 90f;
-
-            EditorSceneManager.MarkSceneDirty(scene);
-            EditorSceneManager.SaveScene(scene);
-            Debug.Log($"[flat] wired {Output} into Main.unity spawn={boot.FlatSpawn}");
-            EditorApplication.Exit(0);
+            EditorUtility.SetDirty(boot);
+            return true;
         }
 
         /// <summary>Player-eye frame inside the flat, four rooms in a row.</summary>
@@ -218,14 +355,14 @@ namespace Mas3D.Editor
 
             var views = new (string name, Vector3 eye, Vector3 look)[]
             {
-                ("flat-bed", new Vector3(-3.20f, 1.42f, 0.95f), new Vector3(0.60f, 1.15f, -0.40f)),
-                ("flat-living", new Vector3(-0.60f, 1.50f, 1.30f), new Vector3(4.20f, 1.20f, -0.60f)),
-                ("flat-dining", new Vector3(5.00f, 1.45f, 2.60f), new Vector3(7.40f, 1.15f, -0.80f)),
-                ("flat-kitchen", new Vector3(4.95f, 1.45f, 2.60f), new Vector3(7.40f, 1.15f, -1.40f)),
-                ("flat-bath", new Vector3(-5.55f, 1.45f, 0.70f), new Vector3(-7.60f, 1.10f, -0.60f)),
-                ("flat-wide", new Vector3(-1.00f, 8.00f, 9.50f), new Vector3(-0.20f, 1.00f, 0.00f)),
-                ("flat-player", boot.Player.transform.position + Vector3.up * 1.42f,
-                    boot.Player.transform.position + Vector3.up * 1.20f + Vector3.right * 3f),
+                ("flat-bed", new Vector3(-3.20f, 1.42f, 0.95f) * FlatScale, new Vector3(0.60f, 1.15f, -0.40f) * FlatScale),
+                ("flat-living", new Vector3(-0.60f, 1.50f, 1.30f) * FlatScale, new Vector3(4.20f, 1.20f, -0.60f) * FlatScale),
+                ("flat-dining", new Vector3(5.00f, 1.45f, 2.60f) * FlatScale, new Vector3(7.40f, 1.15f, -0.80f) * FlatScale),
+                ("flat-kitchen", new Vector3(4.95f, 1.45f, 2.60f) * FlatScale, new Vector3(7.40f, 1.15f, -1.40f) * FlatScale),
+                ("flat-bath", new Vector3(-5.55f, 1.45f, 0.70f) * FlatScale, new Vector3(-7.60f, 1.10f, -0.60f) * FlatScale),
+                ("flat-wide", new Vector3(-1.00f, 8.00f, 9.50f) * FlatScale, new Vector3(-0.20f, 1.00f, 0.00f) * FlatScale),
+                ("flat-player", boot.Player.transform.position + Vector3.up * boot.Player.EyeHeight,
+                    boot.Player.transform.position + Vector3.up * 1.35f + Vector3.right * (3f * FlatScale)),
             };
 
             var shotDir = Path.GetFullPath(Path.Combine(Application.dataPath, "..", "Shots"));

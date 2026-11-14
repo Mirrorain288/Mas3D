@@ -67,6 +67,8 @@ namespace Mas3D.UI
         Label _hint;
         Label _subtitle;
         string _subtitleText = string.Empty;
+        Label _doorPrompt;
+        string _doorPromptText = string.Empty;
         bool _thinkingShown;
         bool _interactable = true;
         // IME 组合态：真输入法读 UnityEngine.Input.compositionString（旧 Input Manager 的公开 API，
@@ -431,6 +433,24 @@ namespace Mas3D.UI
             _subtitle.style.display = hasText ? DisplayStyle.Flex : DisplayStyle.None;
         }
 
+        public string DoorPromptText => _doorPromptText;
+
+        /// <summary>在屏幕底部中央显示或隐藏室内门交互提示（不写入对话历史 LogText）。</summary>
+        public void ShowDoorPrompt(string text)
+        {
+            _doorPromptText = text ?? string.Empty;
+            EnsureBound();
+            ApplyDoorPrompt();
+        }
+
+        void ApplyDoorPrompt()
+        {
+            if (_doorPrompt == null) return;
+            var hasText = !string.IsNullOrEmpty(_doorPromptText);
+            _doorPrompt.text = hasText ? _doorPromptText : string.Empty;
+            _doorPrompt.style.display = hasText ? DisplayStyle.Flex : DisplayStyle.None;
+        }
+
         /// <summary>把玩家的这一句追加进消息流（右对齐）。</summary>
         public void AppendPlayer(string text)
         {
@@ -492,6 +512,7 @@ namespace Mas3D.UI
             _thinking = root.Q<Label>("thinking");
             _log = root.Q<ScrollView>("log");
             _subtitle = root.Q<Label>("subtitle");
+            _doorPrompt = root.Q<Label>("door-prompt");
             HookEscape(root);            // 根节点上的 Escape：不依赖焦点停在哪一层，也不依赖 InputModes 是否在跑
 
             ApplyCjkFallback(root);
@@ -512,6 +533,7 @@ namespace Mas3D.UI
             RefreshPlaceholder();
             ApplyInteractable();
             ApplySubtitle();     // 树重建后字幕不能丢：这里补画一次
+            ApplyDoorPrompt();
         }
 
         /// <summary>
@@ -530,6 +552,7 @@ namespace Mas3D.UI
             _boundDocument = null;
             _input = null;
             _subtitle = null;    // 旧树上的元素：重新绑定时会换新的
+            _doorPrompt = null;
         }
 
         static void DisableChip(VisualElement root, string name)
