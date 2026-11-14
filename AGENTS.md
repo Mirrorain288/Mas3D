@@ -19,6 +19,12 @@
 5. 完成前：用 `verification-before-completion` 给出实际验证结果，必要时 `requesting-code-review`。
 6. 我确认验收后：用 `openspec-archive-change` 归档并同步主规格。
 
+### 接手 / 交接
+
+- 新接手者（人或 AI）先读根目录 `HANDOFF.md`：环境路径、验证命令、踩坑清单、当前未完成项。
+- 交给外部 IDE（如 Antigravity）时，把 `HANDOFF.md` 和 `docs/handoff-gemini-prompt.md` 一起交给它当首条指令。
+- 本仓库的 `.dsh/skills/` 只在 DSH 里生效；外部 IDE 读不到，需按同样的流程（先设计、再 TDD、最后给验证结果）自行遵守。
+
 ### 约束
 
 - 不要自行 `git commit` 或 `git push`，需要提交时先问我。
