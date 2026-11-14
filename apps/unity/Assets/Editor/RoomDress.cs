@@ -98,13 +98,16 @@ namespace Mas3D.Editor
         {
             // Re-based for Linear + ACES (RoomLook owns the grade now). The old numbers were
             // tuned while the room shader graded itself in gamma; kept as-is they read twice as hot.
-            public float moon = 1.1f;
-            public float lamp = 1.1f;
-            public float glow = 1.6f;
+            // Retuned for the imported bedroom (Mita_room): its window sits on the -Z wall and
+            // the moon light is blue, so a strong moon turned every white piece of furniture navy.
+            // Sweep r6t-03 won: moon down, lamp/glow/bounce up.
+            public float moon = 0.28f;
+            public float lamp = 2.8f;
+            public float glow = 3.0f;
             // Cold ambient fill from the window side. There is no floor bounce any more: the low
             // point light lit a round spot under her feet and vanished at some angles once the
             // per-object additional-light budget rotated it out.
-            public float bounce = 0.18f;
+            public float bounce = 1.6f;
             public float temperature = 14f;
             public float tint = 0f;
             // Grade lives in RoomLook now; these defaults mirror its constants so a capture
@@ -624,8 +627,10 @@ namespace Mas3D.Editor
                 var light = glowGo.AddComponent<Light>();
                 light.type = LightType.Point;
                 light.color = Hex(0xfff7f0);
-                // Half of the old level per lamp: four lamps at the old level wash the room out.
-                light.intensity = RoomLook.Scale(tuning.glow * 0.5f);
+                // Full tuning.glow per lamp, same as Retune(): when CreateLights halved it the
+                // tuning sweep and the real build disagreed, and the room shipped one stop darker
+                // than the frame that was approved.
+                light.intensity = RoomLook.Scale(tuning.glow);
                 light.range = 10f;
                 light.shadows = LightShadows.None;
                 if (glow == null) glow = light;
@@ -735,6 +740,44 @@ namespace Mas3D.Editor
             card.transform.rotation = Quaternion.Euler(0f, -90f, 0f);
             card.transform.localScale = new Vector3(bounds.size.z * 1.15f, height * 1.1f, 1f);
             Debug.Log($"[sky] card {card.transform.localScale.x:F2}x{card.transform.localScale.y:F2} at x={card.transform.position.x:F2}");
+            return card;
+        }
+
+        /// <summary>
+        /// Same card, but parked outside a wall that faces -Z. The imported bedroom puts its
+        /// window on the -Z wall, so the old x-axis placement would hang the sky beside the room.
+        /// </summary>
+        public static GameObject BuildSkyCardZ(Bounds bounds, float wallZ)
+        {
+            var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(SkyPath);
+            if (tex == null)
+            {
+                Debug.Log("[sky] missing " + SkyPath);
+                return null;
+            }
+
+            var shader = Shader.Find("Universal Render Pipeline/Unlit");
+            if (shader == null) shader = Shader.Find("Unlit/Texture");
+            var mat = new Material(shader) { name = "night-sky-card" };
+            if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", tex);
+            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", new Color(1.35f, 1.35f, 1.5f, 1f));
+            if (mat.HasProperty("_MainTex")) mat.SetTexture("_MainTex", tex);
+            if (mat.HasProperty("_Color")) mat.SetColor("_Color", new Color(1.35f, 1.35f, 1.5f, 1f));
+            if (mat.HasProperty("_Cull")) mat.SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Off);
+
+            var card = GameObject.CreatePrimitive(PrimitiveType.Quad);
+            card.name = "night-sky-card";
+            var collider = card.GetComponent<Collider>();
+            if (collider != null) UnityEngine.Object.DestroyImmediate(collider);
+            card.GetComponent<MeshRenderer>().sharedMaterial = mat;
+            card.GetComponent<MeshRenderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            card.GetComponent<MeshRenderer>().receiveShadows = false;
+
+            var height = bounds.max.y - 0.4f;
+            card.transform.position = new Vector3(bounds.center.x, height * 0.55f, wallZ - 0.55f);
+            card.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
+            card.transform.localScale = new Vector3(bounds.size.x * 1.15f, height * 1.1f, 1f);
+            Debug.Log($"[sky] card {card.transform.localScale.x:F2}x{card.transform.localScale.y:F2} at z={card.transform.position.z:F2}");
             return card;
         }
 

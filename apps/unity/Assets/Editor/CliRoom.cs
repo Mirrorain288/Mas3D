@@ -12,10 +12,26 @@ namespace Mas3D.Editor
     /// </summary>
     public static class CliRoom
     {
-        public const string RoomPath = "Assets/_Local/room/mita-room.glb";
+        /// <summary>Which imported room the editor tools should look at; -room overrides it.</summary>
+        public static string RoomPath = "Assets/_Local/room/mita-room.glb";
+
+        /// <summary>Point every capture/inspect/anchors helper at another imported asset.</summary>
+        public static void Use(string path)
+        {
+            if (!string.IsNullOrEmpty(path)) RoomPath = path;
+        }
+
+        /// <summary>Batch methods do not receive args, so read -room straight from the command line.</summary>
+        public static void UseFromCommandLine()
+        {
+            var argv = System.Environment.GetCommandLineArgs();
+            for (var i = 0; i < argv.Length - 1; i++)
+                if (argv[i] == "-room") { Use(argv[i + 1]); return; }
+        }
 
         public static void Inspect()
         {
+            UseFromCommandLine();
             AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
 
             var importer = AssetImporter.GetAtPath(RoomPath);

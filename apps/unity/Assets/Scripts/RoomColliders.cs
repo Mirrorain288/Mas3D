@@ -14,13 +14,26 @@ namespace Mas3D
     /// </summary>
     public static class RoomColliders
     {
-        // Boundary meshes whose inside surface is what the player walks on.
+        // Boundary meshes whose inside surface is what the player walks on. The first three are the
+        // .blend bedroom; the flat (无门.fbx) names its shell Floor*/Wall*/Ceiling*/Roof*, so the
+        // prefix rule below covers every import without another table to maintain.
         static readonly HashSet<string> Shell = new HashSet<string>
         {
             "Mesh_0115out", // walls
             "Mesh_0116out", // roof skirt
             "Mesh_0140out", // floor
         };
+
+        static readonly string[] ShellPrefixes = { "Floor", "Wall", "Ceiling", "Roof", "Ground" };
+
+        public static bool IsShell(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return false;
+            if (Shell.Contains(name)) return true;
+            foreach (var prefix in ShellPrefixes)
+                if (name.StartsWith(prefix, System.StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
 
         static readonly Dictionary<string, Mesh> Flipped = new Dictionary<string, Mesh>();
 
@@ -39,7 +52,7 @@ namespace Mas3D
                 }
                 count++;
 
-                if (!twoSidedShell || !Shell.Contains(filter.gameObject.name)) continue;
+                if (!twoSidedShell || !IsShell(filter.gameObject.name)) continue;
                 if (filter.transform.Find("inner-collider") != null) continue;
 
                 var inner = new GameObject("inner-collider");

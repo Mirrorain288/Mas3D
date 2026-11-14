@@ -17,6 +17,43 @@ namespace Mas3D
     public class RoomBootstrap : MonoBehaviour
     {
         public GameObject Room;
+
+        /// <summary>
+        /// The multi-room flat (客厅/卧室/浴室/厨房), baked from 无门.fbx. It stays inactive in the
+        /// shipped scene so every existing test and capture keeps the bedroom it was written against;
+        /// <c>-house 1</c> swaps it in and spawns the player in the bedroom.
+        /// </summary>
+        public GameObject HouseRoom;
+
+        /// <summary>
+        /// The whole apartment baked from 帽子米塔的房间.blend (卧室/客厅/餐厅/浴室/厨房 in one flat).
+        /// Inactive by default like HouseRoom; <c>-flat 1</c> or <see cref="ShowFlat"/> swaps it in.
+        /// </summary>
+        public GameObject FlatRoom;
+
+        /// <summary>Feet position for the apartment, in its own (floor-centred) coordinates.</summary>
+        public Vector3 FlatSpawn = new Vector3(-3.15f, 0.10f, 0.20f);
+
+        /// <summary>Eye height used for the flat's capture cameras (its ceilings are 1.77 m).</summary>
+        public const float FlatEye = 1.42f;
+
+        /// <summary>Degrees around Y. +x runs from the bedroom through the living room to the kitchen.</summary>
+        public float FlatYaw = 90f;
+
+        bool _flatForced;
+
+        /// <summary>Swaps the apartment in before <see cref="Boot"/> runs; used by the capture CLI.</summary>
+        public void ShowFlat()
+        {
+            _flatForced = true;
+        }
+
+        /// <summary>Feet position for that flat, in the flat's own coordinates.</summary>
+        public Vector3 HouseSpawn = new Vector3(-1.62f, 0.10f, -0.30f);
+
+        /// <summary>Degrees around Y. +x is the door from the bedroom into the living room.</summary>
+        public float HouseYaw = 90f;
+
         public PlayerMotor Player;
         public PlayerCameraRig Rig;
         public Camera OutputCamera;
@@ -82,6 +119,30 @@ namespace Mas3D
             StartupArgs = BootArgs.Parse(Environment.GetCommandLineArgs());
             ApplyStartupArgs(StartupArgs);
 
+            // -house 1 walks the flat instead of the bedroom. Read here rather than in BootArgs: it
+            // only swaps one scene reference, and every other switch stays exactly as tested.
+            var flagFlat = System.Array.IndexOf(Environment.GetCommandLineArgs(), "-flat") >= 0;
+            var flatMode = FlatRoom != null && (_flatForced || flagFlat);
+            Debug.Log($"[room] flat={flatMode} forced={_flatForced} flag={flagFlat} flatRoom={(FlatRoom != null)} house={(HouseRoom != null)}");
+            var houseMode = !flatMode && HouseRoom != null && System.Array.IndexOf(Environment.GetCommandLineArgs(), "-house") >= 0;
+            if (flatMode)
+            {
+                Room = FlatRoom;
+                FlatRoom.SetActive(true);
+                if (HouseRoom != null && HouseRoom.activeSelf) HouseRoom.SetActive(false);
+            }
+            else if (houseMode)
+            {
+                Room = HouseRoom;
+                HouseRoom.SetActive(true);
+                if (FlatRoom != null && FlatRoom.activeSelf) FlatRoom.SetActive(false);
+            }
+            else
+            {
+                if (HouseRoom != null && HouseRoom.activeSelf) HouseRoom.SetActive(false);
+                if (FlatRoom != null && FlatRoom.activeSelf) FlatRoom.SetActive(false);
+            }
+
             if (Room != null && AttachColliders) ColliderCount = RoomColliders.Attach(Room);
             Anchors = AnchorTable.Load();
 
@@ -90,8 +151,18 @@ namespace Mas3D
             Player.EnsureReady();
             RoomLook.Apply();
 
-            var anchor = Anchors != null ? Anchors.Anchor(SpawnAnchor) : null;
-            if (anchor != null)
+            var anchor = houseMode || flatMode ? null : Anchors != null ? Anchors.Anchor(SpawnAnchor) : null;
+            if (flatMode)
+            {
+                Player.Teleport(FlatSpawn, FlatYaw);
+                if (Player.Head != null) Player.Head.localRotation = Quaternion.identity;
+            }
+            else if (houseMode)
+            {
+                Player.Teleport(HouseSpawn, HouseYaw);
+                if (Player.Head != null) Player.Head.localRotation = Quaternion.identity;
+            }
+            else if (anchor != null)
             {
                 var feet = anchor.Feet(SpawnLift);
                 Player.Teleport(feet, anchor.facingY);
@@ -102,7 +173,9 @@ namespace Mas3D
             if (Rig != null)
             {
                 Rig.Build(Player.Head, OutputCamera != null ? OutputCamera : Camera.main);
-                if (anchor != null) Rig.SetOrbit(anchor.facingY, 14f);
+                if (flatMode) Rig.SetOrbit(FlatYaw, 14f);
+                else if (houseMode) Rig.SetOrbit(HouseYaw, 14f);
+                else if (anchor != null) Rig.SetOrbit(anchor.facingY, 14f);
             }
 
             // 玩家身体接在相机之后：它要跟的是玩家的 transform 和眼睛高度，而"镜头贴到脸上时把头藏起来"
@@ -205,7 +278,7 @@ namespace Mas3D
             }
             Hotkeys.Bind(Actions, Player, dialoguePanel, Anchors);
 
-            Debug.Log($"[room] colliders={ColliderCount} spawn={(anchor != null ? anchor.id : "none")} at={(anchor != null ? anchor.x.ToString("F2") + "," + anchor.z.ToString("F2") : "-")}");
+            Debug.Log($"[room] colliders={ColliderCount} spawn={(houseMode ? "house" : anchor != null ? anchor.id : "none")} at={(houseMode ? HouseSpawn.x.ToString("F2") + "," + HouseSpawn.z.ToString("F2") : anchor != null ? anchor.x.ToString("F2") + "," + anchor.z.ToString("F2") : "-")}");
 
             // 自检只挂在 -selftest 上：它是玩家包的自动验收入口，编辑器里（命令行不带该参数）连组件都不创建，
             // 场景与既有测试不受影响。放最后是因为它一挂上就要用上面接好的桥接、面板和导演。

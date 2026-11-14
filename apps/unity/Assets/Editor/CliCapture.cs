@@ -31,6 +31,7 @@ namespace Mas3D.Editor
         public static void Capture()
         {
             var args = Environment.GetCommandLineArgs();
+            CliRoom.Use(ParseString(args, "-room", null));
             var shot = ParseString(args, "-shot", "unity-shot");
             var fov = ParseFloat(args, "-fov", 42f);
             var eye = ParseVector(args, "-cam", new Vector3(-2.6f, 1.55f, 0f));
@@ -48,9 +49,47 @@ namespace Mas3D.Editor
 
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
             var room = (GameObject)PrefabUtility.InstantiatePrefab(prefab, scene);
-            var bounds = ComputeBounds(room);
+
+            // -cropBox x0,y0,z0,x1,y1,z1 turns off every renderer whose centre falls outside the
+            // box, which is how a single room is cut out of a dollhouse export; -scale then lifts
+            // the survivor into metres. Both run before the room is re-centred on the origin.
+            var crop = ParseString(args, "-cropBox", null);
+            if (!string.IsNullOrEmpty(crop))
+            {
+                var v = crop.Split(',');
+                if (v.Length == 6)
+                {
+                    var box = new Bounds(
+                        new Vector3(
+                            (float.Parse(v[0]) + float.Parse(v[3])) * 0.5f,
+                            (float.Parse(v[1]) + float.Parse(v[4])) * 0.5f,
+                            (float.Parse(v[2]) + float.Parse(v[5])) * 0.5f),
+                        new Vector3(
+                            Mathf.Abs(float.Parse(v[3]) - float.Parse(v[0])),
+                            Mathf.Abs(float.Parse(v[4]) - float.Parse(v[1])),
+                            Mathf.Abs(float.Parse(v[5]) - float.Parse(v[2]))));
+                    var kept = CropToBox(room, box);
+                    Debug.Log($"[crop] box center={box.center:F2} size={box.size:F2} keeps {kept} renderers");
+                }
+            }
+
+            var scale = ParseFloat(args, "-scale", 1f);
+            if (Mathf.Abs(scale - 1f) > 0.0001f)
+            {
+                room.transform.localScale *= scale;
+                Debug.Log($"[cap] room scaled x{scale}");
+            }
+
+            // -rooms 1 re-assembles an exploded multi-room export into one walkable flat.
+            if (ParseFloat(args, "-rooms", 0f) > 0.5f)
+            {
+                RoomLayout.Assemble(room, out var report);
+                Debug.Log(report);
+            }
+
+            var bounds = ComputeBoundsEnabled(room);
             room.transform.position += new Vector3(-bounds.center.x, -bounds.min.y, -bounds.center.z);
-            bounds = ComputeBounds(room);
+            bounds = ComputeBoundsEnabled(room);
             Debug.Log($"[cap] room bounds min={bounds.min:F2} max={bounds.max:F2} size={bounds.size:F2}");
             LogHierarchy(room, 6);
 
@@ -68,6 +107,8 @@ namespace Mas3D.Editor
                 Debug.Log("[refl] skybox cleared, custom reflection empty, intensity 0");
             }
             if (ParseFloat(args, "-dumpMeshes", 0f) > 0.5f) DumpMeshes(room);
+            var worldCsv = ParseString(args, "-dumpWorld", null);
+            if (!string.IsNullOrEmpty(worldCsv)) DumpWorld(room, worldCsv);
             if (ParseFloat(args, "-uv", 0f) > 0.5f) DumpUv(room);
             if (ParseFloat(args, "-fixWrap", 0f) > 0.5f) ForceWrap(room);
 
@@ -93,6 +134,13 @@ namespace Mas3D.Editor
                     if (keep) shown++;
                 }
                 Debug.Log($"[cap] isolation only='{only}' hide='{hide}' keeps {shown} renderers");
+
+                // Re-centre on whatever survived, so the default camera frames the crop instead of
+                // the whole dollhouse it came out of.
+                var keptBounds = ComputeBoundsEnabled(room);
+                room.transform.position += new Vector3(-keptBounds.center.x, -keptBounds.min.y, -keptBounds.center.z);
+                bounds = ComputeBoundsEnabled(room);
+                Debug.Log($"[cap] crop bounds min={bounds.min:F2} max={bounds.max:F2} size={bounds.size:F2}");
             }
 
             if (ParseFloat(args, "-dumpTex", 0f) > 0.5f) DumpTextures(room);
@@ -217,6 +265,20 @@ namespace Mas3D.Editor
             if (ParseFloat(args, "-dress", 0f) > 0.5f)
             {
                 RoomDress.Apply(room, true, true, tuning, ParseFloat(args, "-probeSolid", 0f) > 0.5f);
+                dressed = true;
+            }
+
+            // -lightsOnly 1 keeps the imported geometry and materials exactly as they came out of
+            // the glb and only hangs the night rig, which is what a room that already ships its own
+            // wallpaper and ceiling needs.
+            if (ParseFloat(args, "-lightsOnly", 0f) > 0.5f)
+            {
+                var rb = RoomDress.RendererBounds(room);
+                RoomDress.CreateLights(room, rb, rb.max.y, tuning);
+                RoomDress.ApplyColour(tuning);
+                if (ParseFloat(args, "-sky", 1f) > 0.5f)
+                    RoomDress.BuildSkyCardZ(rb, rb.min.z);
+                Debug.Log($"[cap] lights only bounds y={rb.min.y:F2}..{rb.max.y:F2}");
                 dressed = true;
             }
 
@@ -381,7 +443,10 @@ namespace Mas3D.Editor
             cam.farClipPlane = 120f;
             // The room is airtight apart from the window opening, so the background is what the
             // glass shows: a real equirect night sky instead of flat black.
-            if (dressed && ParseFloat(args, "-sky", 1f) > 0.5f) RoomDress.BuildSkyCard(bounds, bounds.max.x);
+            // -lightsOnly already hung its own card on the -Z wall; a second one beside the room
+            // would be visible past the corner once the camera turns.
+            if (dressed && ParseFloat(args, "-lightsOnly", 0f) < 0.5f && ParseFloat(args, "-sky", 1f) > 0.5f)
+                RoomDress.BuildSkyCard(bounds, bounds.max.x);
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0.05f, 0.06f, 0.09f, 1f);
             cam.allowHDR = false;
@@ -493,6 +558,10 @@ namespace Mas3D.Editor
             var rt = new RenderTexture(Width, Height, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
             rt.Create();
             cam.targetTexture = rt;
+            // The first frame after the rig is built comes out with the ambient/SH probe still
+            // stale: white furniture reads navy and pink wallpaper reads magenta. Rendering a
+            // throwaway frame first makes the saved image match what the game shows.
+            cam.Render();
             cam.Render();
 
             var previous = RenderTexture.active;
@@ -535,6 +604,27 @@ namespace Mas3D.Editor
             fill.color = new Color32(0x8f, 0xa6, 0xd8, 0xff);
             fill.intensity = 0.35f;
             fillGo.transform.rotation = Quaternion.Euler(10f, 140f, 0f);
+        }
+
+
+        /// <summary>
+        /// Writes each renderer's *runtime* world bounds to a CSV. -dumpMeshes prints mesh-filter
+        /// coordinates, which live in the glTF export space (Z-up, different scale) and cannot be fed
+        /// back into -cam; this is the space the cameras and the player actually use.
+        /// </summary>
+        static void DumpWorld(GameObject room, string path)
+        {
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine("name,minx,miny,minz,maxx,maxy,maxz,cx,cy,cz");
+            foreach (var r in room.GetComponentsInChildren<Renderer>(true))
+            {
+                if (!r.enabled) continue;
+                var b = r.bounds;
+                sb.AppendLine($"{r.gameObject.name},{b.min.x:F3},{b.min.y:F3},{b.min.z:F3}," +
+                              $"{b.max.x:F3},{b.max.y:F3},{b.max.z:F3},{b.center.x:F3},{b.center.y:F3},{b.center.z:F3}");
+            }
+            System.IO.File.WriteAllText(path, sb.ToString());
+            Debug.Log($"[world] wrote {path}");
         }
 
         static void DumpMeshes(GameObject room)
@@ -773,6 +863,53 @@ namespace Mas3D.Editor
             var bounds = renderers[0].bounds;
             for (var i = 1; i < renderers.Length; i++) bounds.Encapsulate(renderers[i].bounds);
             return bounds;
+        }
+
+        /// <summary>Same as ComputeBounds but only counts renderers that are switched on, so a
+        /// crop framed on the survivors is not stretched back over the hidden ones.</summary>
+        static Bounds ComputeBoundsEnabled(GameObject root)
+        {
+            var bounds = new Bounds(root.transform.position, Vector3.zero);
+            var first = true;
+            foreach (var r in root.GetComponentsInChildren<Renderer>(true))
+            {
+                if (!r.enabled) continue;
+                if (first) { bounds = r.bounds; first = false; }
+                else bounds.Encapsulate(r.bounds);
+            }
+            return bounds;
+        }
+
+        /// <summary>Disable renderers whose world bounds centre falls outside box; returns how many stay on.</summary>
+        static int CropToBox(GameObject room, Bounds box)
+        {
+            var kept = 0;
+            var shown = 0;
+            var lo = new Vector3(float.MaxValue, float.MaxValue, float.MaxValue);
+            var hi = new Vector3(float.MinValue, float.MinValue, float.MinValue);
+            foreach (var r in room.GetComponentsInChildren<Renderer>(true))
+            {
+                // renderer.bounds folds in the glTF root scale, which makes the same object read
+                // about 6x closer to the origin than the coordinates the mesh dump prints; the
+                // mesh-filter centre is the quantity the -dumpMeshes log is written in, so crop
+                // against that and the coordinates in the log can be pasted straight in.
+                var filter = r.GetComponent<MeshFilter>();
+                var centre = filter != null && filter.sharedMesh != null
+                    ? filter.transform.TransformPoint(filter.sharedMesh.bounds.center)
+                    : r.bounds.center;
+                lo = Vector3.Min(lo, centre);
+                hi = Vector3.Max(hi, centre);
+                var inside = box.Contains(centre);
+                r.enabled = inside;
+                if (inside) kept++;
+                if (shown < 3 && !inside)
+                {
+                    Debug.Log($"[crop] sample out {r.name} centre={centre:F2} enabled={r.enabled}");
+                    shown++;
+                }
+            }
+            Debug.Log($"[crop] centres span min={lo:F2} max={hi:F2}");
+            return kept;
         }
 
         static string ParseString(string[] args, string flag, string fallback)
