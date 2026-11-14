@@ -1,0 +1,53 @@
+{
+  "files.exclude": {
+    "**/.superpowers": true,
+    "**/.worktrees": true,
+    "**/.tmp": true,
+    "**/build": true,
+    "**/素材": true,
+    "**/node_modules": true,
+    "**/apps/unity/Library": true,
+    "**/apps/unity/Temp": true,
+    "**/apps/unity/Obj": true,
+    "**/apps/unity/Logs": true,
+    "**/apps/unity/TestResults": true,
+    "**/apps/unity/Recordings": true,
+    "**/apps/unity/UserSettings": true,
+    "**/apps/web/dist": true,
+    "**/apps/bridge/.venv": true,
+    "**/apps/bridge/data": true
+  },
+  "search.exclude": {
+    "**/.superpowers": true,
+    "**/.worktrees": true,
+    "**/.tmp": true,
+    "**/build": true,
+    "**/素材": true,
+    "**/node_modules": true,
+    "**/apps/unity/Library": true,
+    "**/apps/unity/Temp": true,
+    "**/apps/unity/Obj": true,
+    "**/apps/unity/Logs": true,
+    "**/apps/unity/TestResults": true,
+    "**/apps/unity/Recordings": true,
+    "**/apps/unity/UserSettings": true,
+    "**/apps/web/dist": true,
+    "**/apps/bridge/.venv": true,
+    "**/apps/bridge/data": true,
+    "**/*.meta": false
+  },
+  "files.watcherExclude": {
+    "**/.superpowers/**": true,
+    "**/.worktrees/**": true,
+    "**/build/**": true,
+    "**/素材/**": true,
+    "**/node_modules/**": true,
+    "**/apps/unity/Library/**": true,
+    "**/apps/unity/Temp/**": true,
+    "**/apps/unity/Obj/**": true,
+    "**/apps/unity/Logs/**": true,
+    "**/apps/unity/TestResults/**": true,
+    "**/apps/unity/Recordings/**": true
+  },
+  "search.followSymlinks": false
+}
