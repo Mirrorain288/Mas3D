@@ -48,6 +48,32 @@ Mas3D 是一个 Windows 桌面 3D 应用：Unity 6.6（URP）渲染一间卡通�
 7. `apps/unity` 的改动 **已于 2026-11-14 提交**（107bda0 / 0676bbf / 4a1e7a3 + tag `handoff-2026-11-14`），
    此后新改动仍按约定先问用户。
 
+### 交接时的真实基线（2026-11-14，逐条实测）
+
+```
+web        PASS  10.2 s
+bridge     SKIP  （没装 python；设 MAS3D_PYTHON 后可跑）
+unity-edit PASS 167.8 s   97 用例，1 skip（RoomLightTests 的投影分档，见未完成 6）
+unity-play FAIL 201.3 s   276/286 通过；6 失败 + 4 skip
+smoke      FAIL 211.2 s   hands 动作过；Cancel 回位偏差 0.180 m（判据 0.05 m）
+player     PASS   8.1 s
+```
+
+**红的 6 条不是回归，是「房间资产换了、判据没跟上」**——它们全部按旧卧室的网格名或旧坐标断言：
+
+| 用例 | 断的是什么旧东西 |
+|---|---|
+| `AvatarSeatTests.NothingSinksIntoTheBench` | 长凳 `Mesh_0001out` |
+| `AvatarWalkTests.AThinPartThatFloatsIsNotExemptFromTheSweep` | 悬空件 `Mesh_0181out` |
+| `AvatarWalkTests.EveryEdgeClearsTheRealRoom` | 旧房间边表；新几何在 S1-A2 处撞上 `mesh_217/mesh_216` |
+| `PlayerWalkTests.EveryAnchorSpawnsOnTheFloor` | 旧锚点 A1（新几何下脚下没地板） |
+| `PlayerWalkTests.PlayerCannotWalkThroughTheWall` | 旧墙位 (-0.72, 3.05) |
+| `RoomAnchorTests.StandingAnchorsClearTheCapsule` | 旧锚点表 |
+
+修法只有一条：**按新房间的世界包围盒重新量锚点与座位槽**（判据：离墙 ≥0.35 m、离静态碰撞体 ≥0.45 m），
+再把上面 6 条用例里的名字/坐标换成新值；`smoke` 的 Cancel 回位偏差要单独查（0.180 m，像是落座点
+在新几何里被碰撞挤出去了）。
+
 ## 3. 环境（本机）
 
 | 工具 | 路径 / 版本 |
