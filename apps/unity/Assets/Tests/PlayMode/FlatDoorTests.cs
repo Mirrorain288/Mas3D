@@ -194,7 +194,7 @@ namespace Mas3D.Tests
         }
 
         [UnityTest]
-        public IEnumerator BootWithDefaultBedroomCreatesNoDoorInteractorAndHidesPrompt()
+        public IEnumerator BootDefaultsToFlatDoorsAndBedroomFallbackCreatesNoDoorInteractor()
         {
             SceneFlow.Require();
             yield return SceneFlow.LoadMain();
@@ -202,9 +202,15 @@ namespace Mas3D.Tests
             var boot = UnityEngine.Object.FindAnyObjectByType<RoomBootstrap>();
             yield return SceneFlow.WaitForBoot(boot);
 
-            Assert.IsNotNull(boot.FlatRoom, "CliPlayer 应保留非激活 FlatRoom 接线");
-            Assert.IsFalse(boot.FlatRoom.activeInHierarchy, "默认卧室启动不得激活平层");
-            Assert.IsNull(boot.Doors, "默认无门卧室启动不得新建 DoorInteractor");
+            Assert.IsNotNull(boot.FlatRoom, "Main.unity 必须保留 FlatRoom 接线");
+            Assert.IsTrue(boot.FlatRoom.activeInHierarchy, "默认平层启动必须激活平层");
+            Assert.IsNotNull(boot.Doors, "默认平层启动必须新建并绑定 DoorInteractor");
+
+            boot.ShowBedroom();
+            yield return SceneFlow.WaitForBoot(boot);
+
+            Assert.IsFalse(boot.FlatRoom.activeInHierarchy, "切回卧室模式不得激活平层");
+            Assert.IsNull(boot.Doors, "切回无门卧室不得保留 DoorInteractor");
 
             var panel = UnityEngine.Object.FindAnyObjectByType<DialoguePanel>();
             Assert.IsNotNull(panel);

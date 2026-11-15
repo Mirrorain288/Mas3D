@@ -14,6 +14,7 @@
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 selfcheck
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 scene
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 anchors
+  powershell -ExecutionPolicy Bypass -File tools/unity.ps1 flatanchors
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 player
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 avatarpose
   powershell -ExecutionPolicy Bypass -File tools/unity.ps1 capture
@@ -25,7 +26,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Position = 0)]
-    [ValidateSet('status', 'editors', 'license', 'open', 'selfcheck', 'urp', 'scene', 'anchors', 'player', 'avatarpose', 'capture', 'test', 'smoke', 'build', 'run')]
+    [ValidateSet('status', 'editors', 'license', 'open', 'selfcheck', 'urp', 'scene', 'anchors', 'flatanchors', 'player', 'avatarpose', 'capture', 'test', 'smoke', 'build', 'run')]
     [string]$Action = 'status',
 
     [ValidateSet('EditMode', 'PlayMode')]
@@ -105,7 +106,9 @@ switch ($Action) {
     'urp'       { Invoke-Batch 'Mas3D.Editor.CliSteps.MakeUrp' }
     'scene'     { Invoke-Batch 'Mas3D.Editor.CliSteps.CreateMainScene' }
     # room anchors solved from measured geometry (see spec 5.17)
-    'anchors'   { Invoke-Batch 'Mas3D.Editor.CliAnchors.Solve' }
+    'anchors'     { Invoke-Batch 'Mas3D.Editor.CliAnchors.Solve' }
+    # flat anchors & navigation graph solved against baked Flat.prefab colliders
+    'flatanchors' { Invoke-Batch 'Mas3D.Editor.CliFlatAnchors.Solve' }
     # playable scene: dressed room + CharacterController player + Cinemachine camera
     # extra args after --rest are forwarded (e.g. -noShadows 1)
     'player'    { Invoke-Batch 'Mas3D.Editor.CliPlayer.BuildScene' -Extra $Rest }

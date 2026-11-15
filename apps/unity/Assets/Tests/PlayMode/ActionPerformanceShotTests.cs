@@ -84,7 +84,7 @@ namespace Mas3D.Tests
         public IEnumerator TheThreePhasesLookDifferent()
         {
             SceneFlow.Require();
-            yield return SceneFlow.LoadMain();
+            yield return SceneFlow.LoadBedroom();
             var boot = Object.FindAnyObjectByType<RoomBootstrap>();
             yield return SceneFlow.WaitForBoot(boot);
 

@@ -45,7 +45,7 @@ namespace Mas3D.Tests
 
             try
             {
-                yield return SceneFlow.LoadMain();
+                yield return SceneFlow.LoadBedroom();
 
                 AvatarActor actor = null;
                 yield return WaitUntilSeated(found => actor = found);
@@ -84,7 +84,7 @@ namespace Mas3D.Tests
 
             try
             {
-                yield return SceneFlow.LoadMain();
+                yield return SceneFlow.LoadBedroom();
 
                 AvatarActor actor = null;
                 yield return WaitUntilSeated(found => actor = found);
@@ -126,7 +126,7 @@ namespace Mas3D.Tests
 
             try
             {
-                yield return SceneFlow.LoadMain();
+                yield return SceneFlow.LoadBedroom();
 
                 AvatarActor actor = null;
                 yield return WaitUntilSeated(found => actor = found);
@@ -168,7 +168,7 @@ namespace Mas3D.Tests
 
             try
             {
-                yield return SceneFlow.LoadMain();
+                yield return SceneFlow.LoadBedroom();
 
                 AvatarActor actor = null;
                 yield return WaitUntilSeated(found => actor = found);

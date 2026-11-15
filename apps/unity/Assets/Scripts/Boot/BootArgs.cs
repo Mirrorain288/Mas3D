@@ -41,7 +41,10 @@ namespace Mas3D.Boot
         /// </summary>
         public readonly bool NoBody;
 
-        BootArgs(string host, int port, string token, string selfTestPath, bool hasBridge, bool noBody)
+        /// <summary>切回旧单卧回退舞台（-bedroom [0|1]，默认 false 走平层主舞台）。</summary>
+        public readonly bool Bedroom;
+
+        BootArgs(string host, int port, string token, string selfTestPath, bool hasBridge, bool noBody, bool bedroom)
         {
             Host = host;
             Port = port;
@@ -49,6 +52,7 @@ namespace Mas3D.Boot
             SelfTestPath = selfTestPath;
             HasBridge = hasBridge;
             NoBody = noBody;
+            Bedroom = bedroom;
         }
 
         /// <summary>host:port，日志行直接拼它。</summary>
@@ -66,22 +70,21 @@ namespace Mas3D.Boot
             string selfTest = null;
             var hasBridge = false;
             var noBody = false;
+            var bedroom = false;
 
-            // 单独先扫一遍 -nobody：它允许不写值（-nobody 就是开），而下面那条循环按"键值成对"走，
+            // 单独先扫布尔开关（-nobody / -bedroom）：允许不写值（裸开关就是开），而下面那条循环按"键值成对"走，
             // 结尾孤零零的开关会被 i + 1 的边界直接跳过。
             if (args != null)
             {
                 for (var i = 0; i < args.Length; i++)
                 {
-                    if (!string.Equals(args[i], "-nobody", System.StringComparison.OrdinalIgnoreCase)) continue;
-                    if (i + 1 < args.Length && IsFlagValue(args[i + 1]))
+                    if (string.Equals(args[i], "-nobody", System.StringComparison.OrdinalIgnoreCase))
                     {
-                        noBody = ParseSwitch(args[i + 1]);
-                        i++;
+                        noBody = ReadOptionalSwitch(args, ref i);
                     }
-                    else
+                    else if (string.Equals(args[i], "-bedroom", System.StringComparison.OrdinalIgnoreCase))
                     {
-                        noBody = true;
+                        bedroom = ReadOptionalSwitch(args, ref i);
                     }
                 }
             }
@@ -130,7 +133,17 @@ namespace Mas3D.Boot
                 token = null;
             }
 
-            return new BootArgs(host, port, token, selfTest, hasBridge, noBody);
+            return new BootArgs(host, port, token, selfTest, hasBridge, noBody, bedroom);
+        }
+
+        static bool ReadOptionalSwitch(string[] args, ref int index)
+        {
+            if (index + 1 < args.Length && IsFlagValue(args[index + 1]))
+            {
+                index++;
+                return ParseSwitch(args[index]);
+            }
+            return true;
         }
 
         /// <summary>下一个参数是"值"还是"另一个开关"：以 - 开头就当成开关，别把 -selftest 吃掉。</summary>

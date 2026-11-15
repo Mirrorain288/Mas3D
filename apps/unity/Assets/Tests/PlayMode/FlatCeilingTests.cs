@@ -40,42 +40,36 @@ namespace Mas3D.Tests
         }
 
         [UnityTest]
-        public IEnumerator ShowFlatDeactivatesDefaultBedroomLightsAndSkyCard()
+        public IEnumerator DefaultBootActivatesFlatAndDeactivatesBedroomLightsAndSkyCard()
         {
             SceneFlow.Require();
             yield return SceneFlow.LoadMain();
 
             var boot = UnityEngine.Object.FindAnyObjectByType<RoomBootstrap>();
             Assert.IsNotNull(boot, "Main.unity 必须包含 RoomBootstrap");
-
-            var defaultRoom = boot.Room;
-            Assert.IsNotNull(defaultRoom, "默认启动前 RoomBootstrap.Room 应指向默认卧室");
             Assert.IsNotNull(boot.FlatRoom, "Main.unity 必须保留 FlatRoom 接线");
-            Assert.AreNotSame(defaultRoom, boot.FlatRoom, "默认卧室与平层对象不应为同一实例");
+            yield return SceneFlow.WaitForBoot(boot);
 
             var roomLights = FindSceneRoot(boot.gameObject.scene, "room-lights");
             var nightSkyCard = FindSceneRoot(boot.gameObject.scene, "night-sky-card");
             Assert.IsNotNull(roomLights, "Main.unity 场景根部应存在 room-lights");
             Assert.IsNotNull(nightSkyCard, "Main.unity 场景根部应存在 night-sky-card");
 
-            boot.ShowFlat();
-            yield return SceneFlow.WaitForBoot(boot);
-
-            Assert.AreSame(boot.FlatRoom, boot.Room, "平层启动后 Room 应切换到 FlatRoom");
-            Assert.IsTrue(boot.FlatRoom.activeInHierarchy, "平层启动后 FlatRoom 必须处于激活状态");
-            Assert.IsFalse(defaultRoom.activeSelf, "平层启动后必须停用默认卧室节点");
-            Assert.IsFalse(defaultRoom.activeInHierarchy, "平层启动后默认卧室不得继续在层级中激活");
+            Assert.AreSame(boot.FlatRoom, boot.Room, "平层主舞台模式下 Room 应指向 FlatRoom");
+            Assert.IsTrue(boot.FlatRoom.activeInHierarchy, "默认平层启动后 FlatRoom 必须处于激活状态");
             Assert.IsFalse(roomLights.activeSelf, "平层启动后必须停用场景根级 room-lights");
             Assert.IsFalse(nightSkyCard.activeSelf, "平层启动后必须停用场景根级 night-sky-card");
+            if (boot.HouseRoom != null) Assert.IsFalse(boot.HouseRoom.activeInHierarchy, "默认启动不得激活 HouseRoom");
+            Assert.AreEqual(AnchorTable.FlatRelativePath, AnchorTable.ActiveRelativePath, "默认应启用 anchors-flat.json");
 
             yield return SceneFlow.UnloadMain();
         }
 
         [UnityTest]
-        public IEnumerator DefaultBootKeepsDefaultBedroomLightsAndSkyCardActiveAndFlatInactive()
+        public IEnumerator ShowBedroomRestoresBedroomLightsAndSkyCardAndRoundTripsToFlat()
         {
             SceneFlow.Require();
-            yield return SceneFlow.LoadMain();
+            yield return SceneFlow.LoadBedroom();
 
             var boot = UnityEngine.Object.FindAnyObjectByType<RoomBootstrap>();
             Assert.IsNotNull(boot, "Main.unity 必须包含 RoomBootstrap");
@@ -83,23 +77,28 @@ namespace Mas3D.Tests
             var defaultRoom = boot.Room;
             Assert.IsNotNull(defaultRoom);
             Assert.IsNotNull(boot.FlatRoom);
+            Assert.AreNotSame(defaultRoom, boot.FlatRoom, "默认卧室与平层对象不应为同一实例");
 
             var roomLights = FindSceneRoot(boot.gameObject.scene, "room-lights");
             var nightSkyCard = FindSceneRoot(boot.gameObject.scene, "night-sky-card");
             Assert.IsNotNull(roomLights);
             Assert.IsNotNull(nightSkyCard);
 
-            yield return SceneFlow.WaitForBoot(boot);
+            Assert.IsTrue(defaultRoom.activeInHierarchy, "ShowBedroom 后应恢复默认卧室激活");
+            Assert.IsTrue(roomLights.activeInHierarchy, "ShowBedroom 后应恢复 room-lights 激活");
+            Assert.IsTrue(nightSkyCard.activeInHierarchy, "ShowBedroom 后应恢复 night-sky-card 激活");
+            Assert.IsFalse(boot.FlatRoom.activeInHierarchy, "ShowBedroom 后必须停用 FlatRoom");
+            Assert.AreEqual(AnchorTable.DefaultRelativePath, AnchorTable.ActiveRelativePath, "卧室模式应切回 anchors.json");
 
-            Assert.AreSame(defaultRoom, boot.Room, "默认启动应保留默认卧室为 Room");
-            Assert.IsTrue(defaultRoom.activeInHierarchy, "默认启动应保持默认卧室激活");
-            Assert.IsTrue(roomLights.activeInHierarchy, "默认启动应保持 room-lights 激活");
-            Assert.IsTrue(nightSkyCard.activeInHierarchy, "默认启动应保持 night-sky-card 激活");
-            Assert.IsFalse(boot.FlatRoom.activeInHierarchy, "默认启动不得激活 FlatRoom");
-            if (boot.HouseRoom != null)
-            {
-                Assert.IsFalse(boot.HouseRoom.activeInHierarchy, "默认启动不得激活 HouseRoom");
-            }
+            boot.ShowFlat();
+            yield return null;
+
+            Assert.AreSame(boot.FlatRoom, boot.Room, "切回平层后 Room 应重新指向 FlatRoom");
+            Assert.IsTrue(boot.FlatRoom.activeInHierarchy);
+            Assert.IsFalse(defaultRoom.activeSelf);
+            Assert.IsFalse(roomLights.activeSelf);
+            Assert.IsFalse(nightSkyCard.activeSelf);
+            Assert.AreEqual(AnchorTable.FlatRelativePath, AnchorTable.ActiveRelativePath);
 
             yield return SceneFlow.UnloadMain();
         }

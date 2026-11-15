@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Globalization;
 using Mas3D.Avatar;
+using Mas3D.Room;
 using UnityEngine;
 
 namespace Mas3D.Actions
@@ -26,6 +27,9 @@ namespace Mas3D.Actions
 
         /// <summary>The orbit that gets moved and restored; optional so a bare rig can still refuse.</summary>
         public PlayerCameraRig Camera;
+
+        /// <summary>When set (or present on Actor), blocks entering actions while walking.</summary>
+        public AvatarWalker Walker;
 
         /// <summary>When true, Escape ends the action.</summary>
         public bool KeyboardInput = true;
@@ -128,9 +132,26 @@ namespace Mas3D.Actions
 
             /// <summary>The surface the plan sits the player on, or 0 when the player stays upright.</summary>
             public float SeatTopY;
+
+            /// <summary>Target eye local height for kiss on the active seat.</summary>
+            public float KissEyeY;
+
+            /// <summary>Vertical delta of the active seat above the bedroom ottoman, lifting pat-her hand to match.</summary>
+            public float PatHerLiftY;
+
+            /// <summary>Seat id her body should occupy during sit-together.</summary>
+            public string ActorSeatId;
+
+            /// <summary>True when sit-together transitions her into the bed pose (legacy bedroom).</summary>
+            public bool ActorUsesBedPose;
+
+            /// <summary>Expected hips world position for sit-together contact accounting.</summary>
+            public Vector3 ExpectedHips;
         }
 
         string _current;
+        string _wasSeatId;
+        float _patHerLiftY;
         float _held;
         float _contactError;
         ActionPhase _phase;
@@ -259,6 +280,9 @@ namespace Mas3D.Actions
         /// no plan for, a busy director, or a marker the actor cannot reach all return false and
         /// leave the player, the camera and the posture exactly as they were.
         /// </summary>
+        AvatarWalker ActiveWalker() =>
+            Walker != null ? Walker : (Actor != null ? Actor.GetComponent<AvatarWalker>() : null);
+
         public bool TryEnterAction(string id)
         {
             if (_current != null) return Refuse("busy: " + _current);
@@ -266,6 +290,8 @@ namespace Mas3D.Actions
                 return Refuse("unknown action: " + id);
             if (Actor == null || Actor.Rig == null) return Refuse("missing actor: " + id);
             if (Player == null || Player.Head == null) return Refuse("missing player: " + id);
+            var walker = ActiveWalker();
+            if (walker != null && walker.Walking) return Refuse("walker: busy walking (" + id + ")");
 
             if (!ResolvePlan(id, out var plan)) return Refuse(_lastFaults ?? (id + ": not implemented"));
             if (!Reachable(id, plan)) return Refuse(id + ": out of reach");
@@ -274,6 +300,7 @@ namespace Mas3D.Actions
             _wasYaw = Player.transform.eulerAngles.y;
             _wasPosture = Player.Posture;
             _wasKeyboardInput = Player.KeyboardInput;
+            _wasSeatId = string.IsNullOrEmpty(Actor.SeatId) ? AvatarActor.DefaultSeatId : Actor.SeatId;
             if (Camera != null)
             {
                 _wasCameraYaw = Camera.Yaw;
@@ -283,22 +310,30 @@ namespace Mas3D.Actions
                 _wasMouseInput = Camera.MouseInput;
             }
 
-            // She sits down first. Sit-together is the one action that moves her: the player's slot is
-            // her twin on the mattress, and her capsule is fitted from the hips the bed pose leaves.
-            // Her seat is the one step that can fail without throwing, and a silent failure would leave
-            // the player standing at a mattress she is not on: DriveSitTogether then measures a 1.5 m
-            // gap forever while the director reports a performance. Ask first, and refuse before a
-            // single byte of the player's state moves.
-            if (id == ActionId.SitTogether && !Actor.SitOnBed(BedSeatId))
-                return Refuse("sit-together: she could not sit on the bed");
+            if (id == ActionId.SitTogether)
+            {
+                if (plan.ActorUsesBedPose)
+                {
+                    if (!Actor.SitOnBed(plan.ActorSeatId))
+                        return Refuse("sit-together: she could not sit on the bed");
+                }
+                else if (Actor.Seat == null || !Actor.Seat.Seated || Actor.SeatId != plan.ActorSeatId)
+                {
+                    Actor.SitAt(plan.ActorSeatId);
+                    if (Actor.Seat == null || !Actor.Seat.Seated)
+                        return Refuse("sit-together: she could not sit on the sofa");
+                }
+                _bedHips = plan.ExpectedHips;
+            }
 
             Player.KeyboardInput = false;
             try
             {
                 LastSpot = plan.Spot;
+                _patHerLiftY = plan.PatHerLiftY;
                 Player.SetPosture(plan.Posture, plan.SeatTopY);
                 if (id == ActionId.Kiss && Player.Head != null)
-                    Player.Head.localPosition = new Vector3(0f, KissEyeHeight, 0f);
+                    Player.Head.localPosition = new Vector3(0f, plan.KissEyeY, 0f);
 
                 // Settle and approach are different verbs. A settle (the kiss, the two of them on
                 // the bed) has to be on its mark on frame one: the shot is framed from there and
@@ -446,7 +481,7 @@ namespace Mas3D.Actions
                 // action that moved her, and leaving her on the mattress would strand the capsule
                 // there for the next action to walk into.
                 if (_current == ActionId.SitTogether && Actor != null)
-                    Actor.SitAt(string.IsNullOrEmpty(Actor.SeatId) ? AvatarActor.DefaultSeatId : Actor.SeatId);
+                    Actor.SitAt(string.IsNullOrEmpty(_wasSeatId) ? AvatarActor.DefaultSeatId : _wasSeatId);
 
                 if (Player != null)
                 {
@@ -839,7 +874,7 @@ namespace Mas3D.Actions
             // partial weight she aims at the palm only as far as the performance has started.
             var head = rig.Bone(HumanBodyBones.Head);
             var before = head != null ? head.localRotation : Quaternion.identity;
-            _contactError = BowHeadTo(rig, PlayerReach.Raised(Player, false));
+            _contactError = BowHeadTo(rig, PlayerReach.Raised(Player, false) + Vector3.up * _patHerLiftY);
 
             var weight = PhaseWeight;
             if (head != null && weight < 1f)
@@ -1009,11 +1044,37 @@ namespace Mas3D.Actions
             }
 
             var table = AnchorTable.Load();
+            var seatId = string.IsNullOrEmpty(Actor.SeatId) ? AvatarActor.DefaultSeatId : Actor.SeatId;
+            var activeSeat = table != null ? table.Seat(seatId) : null;
 
-            // Sit-together is the one plan that moves her: both bodies sit on the bed, so it is the bed
-            // slot plus the synthetic twin 0.70 m along her right hand, not a marker in front of her.
             if (id == ActionId.SitTogether)
             {
+                if (ActionSeats.IsFlatTable(table))
+                {
+                    if (activeSeat == null)
+                    {
+                        _lastFaults = id + ": seat " + seatId + " missing";
+                        return false;
+                    }
+                    if (!ActionSeats.AllowsIntimate(table, activeSeat))
+                    {
+                        _lastFaults = id + ": seat " + seatId + " not intimate";
+                        return false;
+                    }
+
+                    var pair = ActionSeats.PartnerSeat(table, activeSeat);
+                    plan.Posture = PlayerPosture.Sitting;
+                    plan.SeatTopY = pair.topY > 0f ? pair.topY : activeSeat.topY;
+                    plan.Spot = new Vector3(pair.x, 0f, pair.z);
+                    plan.Yaw = pair.facingY;
+                    plan.OrbitYaw = Mathf.Repeat(pair.facingY + SitOrbitYaw, 360f);
+                    plan.OrbitPitch = HandsOrbitPitch;
+                    plan.ActorSeatId = activeSeat.id;
+                    plan.ActorUsesBedPose = false;
+                    plan.ExpectedHips = new Vector3(activeSeat.x, activeSeat.y + AvatarSeat.HipsGap, activeSeat.z);
+                    return true;
+                }
+
                 var bed = table != null ? table.Seat(BedSeatId) : null;
                 if (bed == null)
                 {
@@ -1021,32 +1082,42 @@ namespace Mas3D.Actions
                     return false;
                 }
 
-                var pair = ActionSeats.BedPair(bed);
+                var bedPair = ActionSeats.BedPair(bed);
                 plan.Posture = PlayerPosture.Sitting;
                 plan.SeatTopY = bed.topY;
-                plan.Spot = new Vector3(pair.x, 0f, pair.z);
+                plan.Spot = new Vector3(bedPair.x, 0f, bedPair.z);
                 plan.Yaw = bed.facingY;
                 plan.OrbitYaw = Mathf.Repeat(bed.facingY + SitOrbitYaw, 360f);
                 plan.OrbitPitch = HandsOrbitPitch;
-                _bedHips = new Vector3(bed.x, bed.topY + AvatarSeat.HipsGap, bed.z);
+                plan.ActorSeatId = BedSeatId;
+                plan.ActorUsesBedPose = true;
+                plan.ExpectedHips = new Vector3(bed.x, bed.topY + AvatarSeat.HipsGap, bed.z);
                 return true;
             }
 
-            var seatId = string.IsNullOrEmpty(Actor.SeatId) ? AvatarActor.DefaultSeatId : Actor.SeatId;
-            var seat = table != null ? table.Seat(seatId) : null;
-            if (seat == null)
+            if (activeSeat == null)
             {
                 _lastFaults = id + ": seat " + seatId + " missing";
                 return false;
             }
+            if (!ActionSeats.AllowsIntimate(table, activeSeat))
+            {
+                _lastFaults = id + ": seat " + seatId + " not intimate";
+                return false;
+            }
 
-            var facing = Quaternion.Euler(0f, seat.facingY, 0f);
+            const float bedroomOttomanTopY = 0.338f;
+            var seatLift = activeSeat.topY > 0f ? activeSeat.topY - bedroomOttomanTopY : 0f;
+            plan.KissEyeY = KissEyeHeight + seatLift;
+            plan.PatHerLiftY = seatLift;
+
+            var facing = Quaternion.Euler(0f, activeSeat.facingY, 0f);
             plan.Posture = kiss ? PlayerPosture.Kneeling
                 : patMe ? PlayerPosture.Crouching
                 : PlayerPosture.Standing;
             var offset = kiss ? KissOffset : patMe ? PatMeOffset : HandsOffset;
-            plan.Spot = new Vector3(seat.x, 0f, seat.z) + facing * Vector3.forward * offset;
-            plan.Yaw = Mathf.Repeat(seat.facingY + 180f, 360f);
+            plan.Spot = new Vector3(activeSeat.x, 0f, activeSeat.z) + facing * Vector3.forward * offset;
+            plan.Yaw = Mathf.Repeat(activeSeat.facingY + 180f, 360f);
             plan.OrbitYaw = kiss ? Mathf.Repeat(plan.Yaw + KissOrbitYaw, 360f) : plan.Yaw;
             plan.OrbitPitch = HandsOrbitPitch;
             return true;

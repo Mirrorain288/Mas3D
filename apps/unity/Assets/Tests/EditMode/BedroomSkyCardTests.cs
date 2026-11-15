@@ -59,6 +59,11 @@ namespace Mas3D.Tests
             var skyCard = FindSceneRoot(_openedMain, "night-sky-card");
             Assert.IsNotNull(skyCard, "Main.unity 场景根级应存在 night-sky-card");
 
+            // Main.unity now saves with FlatRoom active and the legacy bedroom + skyCard inactive.
+            // Enable them temporarily (TearDown unloads without saving) so EditMode renderer bounds are live.
+            if (!boot.Room.activeSelf) boot.Room.SetActive(true);
+            if (!skyCard.activeSelf) skyCard.SetActive(true);
+
             var windowObj = RoomDress.FindByName(boot.Room, WindowMeshName);
             Assert.IsNotNull(windowObj, "默认卧室缺少 -Z 窗洞网格 " + WindowMeshName);
             var windowRenderer = windowObj.GetComponent<Renderer>();

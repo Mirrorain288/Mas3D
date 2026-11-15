@@ -11,12 +11,13 @@ namespace Mas3D.Room
     /// </summary>
     public sealed class WalkNode
     {
-        internal WalkNode(string id, Vector3 feet, float facingY, string seatId)
+        internal WalkNode(string id, Vector3 feet, float facingY, string seatId, string room = null)
         {
             Id = id;
             Feet = feet;
             FacingY = facingY;
             SeatId = seatId;
+            Room = room;
         }
 
         public string Id { get; private set; }
@@ -30,6 +31,9 @@ namespace Mas3D.Room
         /// <summary>The seat this node stands in front of, or null for a plain standing spot.</summary>
         public string SeatId { get; private set; }
 
+        /// <summary>Logical room tag (e.g. "bedroom", "living", "kitchen"), null in legacy single-room mode.</summary>
+        public string Room { get; private set; }
+
         public bool IsSeat { get { return !string.IsNullOrEmpty(SeatId); } }
 
         public override string ToString()
@@ -41,10 +45,11 @@ namespace Mas3D.Room
     /// <summary>One straight segment between two nodes. Length is flat distance: she walks on the floor.</summary>
     public sealed class WalkEdge
     {
-        internal WalkEdge(WalkNode from, WalkNode to)
+        internal WalkEdge(WalkNode from, WalkNode to, string doorId = null)
         {
             From = from;
             To = to;
+            DoorId = doorId;
             var delta = to.Feet - from.Feet;
             delta.y = 0f;
             Length = delta.magnitude;
@@ -52,6 +57,7 @@ namespace Mas3D.Room
 
         public WalkNode From { get; private set; }
         public WalkNode To { get; private set; }
+        public string DoorId { get; private set; }
         public float Length { get; private set; }
 
         public override string ToString()
@@ -128,6 +134,23 @@ namespace Mas3D.Room
         static List<WalkEdge> _edges;
         static Dictionary<string, WalkNode> _byId;
 
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        static void ResetStaticOnDomainLoad()
+        {
+            _nodes = null;
+            _edges = null;
+            _byId = null;
+        }
+
+        /// <summary>丢弃缓存边表并按当前活跃 AnchorTable 重新构图。</summary>
+        public static void Rebuild()
+        {
+            _nodes = null;
+            _edges = null;
+            _byId = null;
+            Build();
+        }
+
         public static IReadOnlyList<WalkNode> Nodes
         {
             get
@@ -178,11 +201,28 @@ namespace Mas3D.Room
 
             foreach (var edge in _edges)
             {
-                if (edge.From == node) result.Add(new WalkEdge(node, edge.To));
-                else if (edge.To == node) result.Add(new WalkEdge(node, edge.From));
+                if (edge.From == node) result.Add(new WalkEdge(node, edge.To, edge.DoorId));
+                else if (edge.To == node) result.Add(new WalkEdge(node, edge.From, edge.DoorId));
             }
 
             return result;
+        }
+
+        /// <summary>查找从 <paramref name="fromId"/> 到 <paramref name="toId"/> 的有向视图边，不存在则返 null。</summary>
+        public static WalkEdge FindEdge(string fromId, string toId)
+        {
+            Build();
+            var from = Node(fromId);
+            var to = Node(toId);
+            if (from == null || to == null) return null;
+
+            foreach (var edge in _edges)
+            {
+                if (edge.From == from && edge.To == to) return edge;
+                if (edge.To == from && edge.From == to) return new WalkEdge(from, to, edge.DoorId);
+            }
+
+            return null;
         }
 
         /// <summary>
@@ -269,8 +309,18 @@ namespace Mas3D.Room
 
             var nodes = new List<WalkNode>();
             var byId = new Dictionary<string, WalkNode>(StringComparer.OrdinalIgnoreCase);
+            var edges = new List<WalkEdge>();
 
             var table = AnchorTable.Load();
+            if (table != null && table.links != null && table.links.Length > 0)
+            {
+                BuildFromTable(table, nodes, byId, edges);
+                _nodes = nodes;
+                _byId = byId;
+                _edges = edges;
+                return;
+            }
+
             if (table == null)
             {
                 Debug.LogError("[walk] anchors.json 读不到，走位图只剩绕床拐点");
@@ -286,7 +336,7 @@ namespace Mas3D.Room
                         continue;
                     }
 
-                    Add(nodes, byId, new WalkNode(anchor.id, new Vector3(anchor.x, FeetHeight, anchor.z), anchor.facingY, null));
+                    Add(nodes, byId, new WalkNode(anchor.id, new Vector3(anchor.x, FeetHeight, anchor.z), anchor.facingY, null, EmptyToNull(anchor.room)));
                 }
 
                 foreach (var id in SeatIds)
@@ -310,14 +360,13 @@ namespace Mas3D.Room
 
                     var forward = Quaternion.Euler(0f, seat.facingY, 0f) * Vector3.forward;
                     var feet = new Vector3(seat.x, FeetHeight, seat.z) + forward * along;
-                    Add(nodes, byId, new WalkNode(seat.id, feet, seat.facingY, seat.id));
+                    Add(nodes, byId, new WalkNode(seat.id, feet, seat.facingY, seat.id, EmptyToNull(seat.room)));
                 }
             }
 
             Add(nodes, byId, new WalkNode("W1", CornerW1, 0f, null));
             Add(nodes, byId, new WalkNode("W2", CornerW2, 0f, null));
 
-            var edges = new List<WalkEdge>();
             for (var i = 0; i < Links.GetLength(0); i++)
             {
                 WalkNode from;
@@ -334,6 +383,66 @@ namespace Mas3D.Room
             _nodes = nodes;
             _byId = byId;
             _edges = edges;
+        }
+
+        static void BuildFromTable(AnchorTable table, List<WalkNode> nodes, Dictionary<string, WalkNode> byId, List<WalkEdge> edges)
+        {
+            if (table.anchors != null)
+            {
+                foreach (var anchor in table.anchors)
+                {
+                    if (anchor == null || string.IsNullOrEmpty(anchor.id)) continue;
+                    Add(nodes, byId, new WalkNode(anchor.id, new Vector3(anchor.x, FeetHeight, anchor.z), anchor.facingY, null, EmptyToNull(anchor.room)));
+                }
+            }
+
+            if (table.seats != null)
+            {
+                foreach (var seat in table.seats)
+                {
+                    if (seat == null || string.IsNullOrEmpty(seat.id)) continue;
+                    float along = seat.standGap > 0f
+                        ? seat.standGap
+                        : (SeatStands.TryGetValue(seat.id, out var legacyAlong) ? legacyAlong : SeatStandGap);
+                    var forward = Quaternion.Euler(0f, seat.facingY, 0f) * Vector3.forward;
+                    var feet = new Vector3(seat.x, FeetHeight, seat.z) + forward * along;
+                    Add(nodes, byId, new WalkNode(seat.id, feet, seat.facingY, seat.id, EmptyToNull(seat.room)));
+                }
+            }
+
+            if (table.waypoints != null)
+            {
+                foreach (var wp in table.waypoints)
+                {
+                    if (wp == null || string.IsNullOrEmpty(wp.id)) continue;
+                    Add(nodes, byId, new WalkNode(wp.id, new Vector3(wp.x, FeetHeight, wp.z), wp.facingY, null, EmptyToNull(wp.room)));
+                }
+            }
+
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var link in table.links)
+            {
+                if (link == null || string.IsNullOrEmpty(link.a) || string.IsNullOrEmpty(link.b)) continue;
+                WalkNode from;
+                WalkNode to;
+                if (!byId.TryGetValue(link.a, out from) || !byId.TryGetValue(link.b, out to) || from == to)
+                {
+                    Debug.LogError("[walk] 动态边 " + link.a + "-" + link.b + " 指向不存在的节点");
+                    continue;
+                }
+
+                var key = string.Compare(from.Id, to.Id, StringComparison.OrdinalIgnoreCase) < 0
+                    ? from.Id + "|" + to.Id
+                    : to.Id + "|" + from.Id;
+                if (!seen.Add(key)) continue;
+
+                edges.Add(new WalkEdge(from, to, EmptyToNull(link.doorId)));
+            }
+        }
+
+        static string EmptyToNull(string value)
+        {
+            return string.IsNullOrEmpty(value) ? null : value;
         }
 
         static void Add(List<WalkNode> nodes, Dictionary<string, WalkNode> byId, WalkNode node)

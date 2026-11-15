@@ -1,0 +1,281 @@
+{
+    "space": "flat",
+    "interior": {
+        "x0": -7.599999904632568,
+        "x1": 11.050000190734863,
+        "z0": -4.150000095367432,
+        "z1": 4.5
+    },
+    "defaultSpawn": {
+        "id": "player-living",
+        "room": "living",
+        "x": 2.505000114440918,
+        "y": 0.019999999552965164,
+        "z": -1.6460000276565552,
+        "facingY": 360.0
+    },
+    "anchors": [
+        {
+            "id": "A1",
+            "role": "living-sofa-front",
+            "room": "living",
+            "x": 2.505000114440918,
+            "z": -1.5460001230239868,
+            "facingY": 0.0,
+            "wallClear": 0.30000001192092896,
+            "nearestClear": 0.30000001192092896
+        },
+        {
+            "id": "A2",
+            "role": "living-window",
+            "room": "living",
+            "x": 3.1500000953674316,
+            "z": -3.1000001430511475,
+            "facingY": 180.0,
+            "wallClear": 0.30000001192092896,
+            "nearestClear": 0.30000001192092896
+        },
+        {
+            "id": "A3",
+            "role": "bedroom-center",
+            "room": "bedroom",
+            "x": -4.298000335693359,
+            "z": -0.9500000476837158,
+            "facingY": 270.0,
+            "wallClear": 0.30000001192092896,
+            "nearestClear": 0.30000001192092896
+        },
+        {
+            "id": "A4",
+            "role": "bedroom-reading",
+            "room": "bedroom",
+            "x": -3.250000238418579,
+            "z": 0.7000000476837158,
+            "facingY": 45.0,
+            "wallClear": 0.30000001192092896,
+            "nearestClear": 0.30000001192092896
+        },
+        {
+            "id": "A5",
+            "role": "bedroom-window",
+            "room": "bedroom",
+            "x": -5.450000286102295,
+            "z": 0.25,
+            "facingY": 0.0,
+            "wallClear": 0.30000001192092896,
+            "nearestClear": 0.30000001192092896
+        },
+        {
+            "id": "A6",
+            "role": "dining-table",
+            "room": "kitchen",
+            "x": 8.800000190734863,
+            "z": 0.45000001788139343,
+            "facingY": 0.0,
+            "wallClear": 0.30000001192092896,
+            "nearestClear": 0.30000001192092896
+        },
+        {
+            "id": "A7",
+            "role": "kitchen-counter",
+            "room": "kitchen",
+            "x": 9.450000762939453,
+            "z": -0.25,
+            "facingY": 180.0,
+            "wallClear": 0.30000001192092896,
+            "nearestClear": 0.30000001192092896
+        }
+    ],
+    "seats": [
+        {
+            "id": "S1",
+            "mesh": "mesh_218.002",
+            "room": "living",
+            "pose": "sofa",
+            "standGap": 0.7000000476837158,
+            "intimate": true,
+            "x": 2.505000114440918,
+            "y": 0.5430000424385071,
+            "z": -0.29600000381469727,
+            "topY": 0.5330000519752502,
+            "facingY": 180.0
+        },
+        {
+            "id": "S2",
+            "mesh": "mesh_218.002",
+            "room": "living",
+            "pose": "sofa",
+            "standGap": 0.7000000476837158,
+            "intimate": true,
+            "x": 1.8050000667572021,
+            "y": 0.5430000424385071,
+            "z": -0.29600000381469727,
+            "topY": 0.5330000519752502,
+            "facingY": 180.0
+        },
+        {
+            "id": "S3",
+            "mesh": "mesh_216",
+            "room": "bedroom",
+            "pose": "bed",
+            "standGap": 2.0500001907348633,
+            "intimate": false,
+            "x": -4.748000144958496,
+            "y": 0.7860000133514404,
+            "z": -2.9660000801086426,
+            "topY": 0.7760000228881836,
+            "facingY": 0.0
+        }
+    ],
+    "waypoints": [
+        {
+            "id": "D_BL_B",
+            "room": "bedroom",
+            "x": -2.68500018119812,
+            "z": -0.29200002551078796,
+            "facingY": 90.0
+        },
+        {
+            "id": "D_BL_L",
+            "room": "living",
+            "x": -0.5850000381469727,
+            "z": -0.29200002551078796,
+            "facingY": 270.0
+        },
+        {
+            "id": "D_LK_L",
+            "room": "living",
+            "x": 5.566000461578369,
+            "z": -0.29500001668930054,
+            "facingY": 90.0
+        },
+        {
+            "id": "D_LK_K",
+            "room": "kitchen",
+            "x": 7.6660003662109375,
+            "z": -0.29500001668930054,
+            "facingY": 270.0
+        },
+        {
+            "id": "W_LIV_E",
+            "room": "living",
+            "x": 5.150000095367432,
+            "z": -1.350000023841858,
+            "facingY": 90.0
+        },
+        {
+            "id": "W_LIV_W",
+            "room": "living",
+            "x": 0.05000000074505806,
+            "z": -1.25,
+            "facingY": 270.0
+        }
+    ],
+    "links": [
+        {
+            "a": "S1",
+            "b": "S2",
+            "doorId": ""
+        },
+        {
+            "a": "S1",
+            "b": "A1",
+            "doorId": ""
+        },
+        {
+            "a": "S2",
+            "b": "A1",
+            "doorId": ""
+        },
+        {
+            "a": "A1",
+            "b": "A2",
+            "doorId": ""
+        },
+        {
+            "a": "A1",
+            "b": "W_LIV_W",
+            "doorId": ""
+        },
+        {
+            "a": "S2",
+            "b": "W_LIV_W",
+            "doorId": ""
+        },
+        {
+            "a": "W_LIV_W",
+            "b": "D_BL_L",
+            "doorId": ""
+        },
+        {
+            "a": "A1",
+            "b": "W_LIV_E",
+            "doorId": ""
+        },
+        {
+            "a": "A2",
+            "b": "W_LIV_E",
+            "doorId": ""
+        },
+        {
+            "a": "W_LIV_E",
+            "b": "D_LK_L",
+            "doorId": ""
+        },
+        {
+            "a": "D_BL_B",
+            "b": "D_BL_L",
+            "doorId": "Door_BedroomLiving"
+        },
+        {
+            "a": "D_BL_B",
+            "b": "A3",
+            "doorId": ""
+        },
+        {
+            "a": "D_BL_B",
+            "b": "A4",
+            "doorId": ""
+        },
+        {
+            "a": "A3",
+            "b": "S3",
+            "doorId": ""
+        },
+        {
+            "a": "A3",
+            "b": "A4",
+            "doorId": ""
+        },
+        {
+            "a": "A3",
+            "b": "A5",
+            "doorId": ""
+        },
+        {
+            "a": "A4",
+            "b": "A5",
+            "doorId": ""
+        },
+        {
+            "a": "D_LK_L",
+            "b": "D_LK_K",
+            "doorId": "Door_LivingKitchen"
+        },
+        {
+            "a": "D_LK_K",
+            "b": "A6",
+            "doorId": ""
+        },
+        {
+            "a": "D_LK_K",
+            "b": "A7",
+            "doorId": ""
+        },
+        {
+            "a": "A6",
+            "b": "A7",
+            "doorId": ""
+        }
+    ]
+}

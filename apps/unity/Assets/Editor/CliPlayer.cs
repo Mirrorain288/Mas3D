@@ -27,6 +27,7 @@ namespace Mas3D.Editor
         public const string ScenePath = "Assets/Scenes/Main.unity";
         public const string StreamingDir = "Assets/StreamingAssets/mas3d";
         public const string AnchorSource = "Anchors/anchors.json";
+        public const string FlatAnchorSource = "Anchors/anchors-flat.json";
         public const string PanelSettingsPath = "Assets/UI/DialoguePanelSettings.asset";
         public const string DialogueTreePath = "Assets/UI/Dialogue.uxml";
 
@@ -160,7 +161,32 @@ namespace Mas3D.Editor
                     EditorApplication.Exit(1);
                     return;
                 }
-                Debug.Log("[player] wired FlatRoom into Main.unity (inactive)");
+                boot.FlatRoom.SetActive(true);
+                room.SetActive(false);
+                SetSceneRootActive(scene, "room-lights", false);
+                SetSceneRootActive(scene, "night-sky-card", false);
+
+                AnchorTable.SetActiveRelativePath(AnchorTable.FlatRelativePath);
+                try
+                {
+                    var flatTable = AnchorTable.Load();
+                    if (flatTable != null && flatTable.defaultSpawn != null && flatTable.defaultSpawn.HasValue)
+                    {
+                        player.transform.position = flatTable.defaultSpawn.Feet(RoomBootstrap.SpawnLift);
+                        player.transform.rotation = Quaternion.Euler(0f, flatTable.defaultSpawn.facingY, 0f);
+                    }
+                    var flatPark = flatTable != null ? flatTable.Anchor("A5") : null;
+                    if (flatPark != null)
+                    {
+                        actor.Seat.Stand(flatPark.Feet(), flatPark.facingY);
+                        actor.FitBody();
+                    }
+                }
+                finally
+                {
+                    AnchorTable.ResetActive();
+                }
+                Debug.Log("[player] wired FlatRoom into Main.unity as primary active stage");
             }
 
             EditorSceneManager.MarkSceneDirty(scene);
@@ -269,20 +295,38 @@ namespace Mas3D.Editor
             return camera;
         }
 
+        static void SetSceneRootActive(UnityEngine.SceneManagement.Scene scene, string rootName, bool active)
+        {
+            foreach (var root in scene.GetRootGameObjects())
+            {
+                if (string.Equals(root.name, rootName, System.StringComparison.Ordinal))
+                {
+                    root.SetActive(active);
+                    return;
+                }
+            }
+        }
+
         static void CopyAnchors()
         {
             EnsureFolder("Assets/StreamingAssets");
             EnsureFolder(StreamingDir);
-            var source = Path.GetFullPath(Path.Combine(Application.dataPath, "..", AnchorSource));
+            CopyAnchorFile(AnchorSource, "anchors.json");
+            CopyAnchorFile(FlatAnchorSource, "anchors-flat.json");
+        }
+
+        static void CopyAnchorFile(string relativeSource, string targetName)
+        {
+            var source = Path.GetFullPath(Path.Combine(Application.dataPath, "..", relativeSource));
             if (!File.Exists(source))
             {
                 Debug.LogWarning("[player] anchor table missing at " + source);
                 return;
             }
-            var target = Path.GetFullPath(Path.Combine(StreamingDir, "anchors.json"));
+            var target = Path.GetFullPath(Path.Combine(StreamingDir, targetName));
             File.Copy(source, target, true);
-            AssetDatabase.ImportAsset(Path.Combine(StreamingDir, "anchors.json"));
-            Debug.Log("[player] anchors copied to " + Path.Combine(StreamingDir, "anchors.json"));
+            AssetDatabase.ImportAsset(Path.Combine(StreamingDir, targetName));
+            Debug.Log("[player] anchors copied to " + Path.Combine(StreamingDir, targetName));
         }
 
 
@@ -349,6 +393,8 @@ namespace Mas3D.Editor
             var target = new RenderTexture(1280, 720, 24, RenderTextureFormat.ARGB32, RenderTextureReadWrite.sRGB);
             camera.targetTexture = target;
 
+            var baseYaw = boot.FlatRoom != null && boot.Room == boot.FlatRoom ? rig.Yaw : 86f;
+
             // `-diagLights 1` renders the spawn view once per light group with that group off, so a
             // colour that only shows up from one side can be traced to the lamp responsible instead
             // of guessed at. Diagnostic only; the five delivery shots are written afterwards.
@@ -366,7 +412,7 @@ namespace Mas3D.Editor
                 var names = string.Join(",", all.Select(l => l.name + "=" + l.intensity.ToString("F2")));
                 Debug.Log("[play] lights " + names);
 
-                rig.SetOrbit(86f, 14f);
+                rig.SetOrbit(baseYaw, 14f);
                 brain.ManualUpdate();
                 foreach (var group in groups)
                 {
@@ -384,7 +430,7 @@ namespace Mas3D.Editor
             // 批处理里没有 Update 循环：Cinemachine 的阻尼只跟着 ManualUpdate 前进。
             // 先空转两帧把相机收敛到目标机位，否则第一张 play-01 拍的是「还在飞」的相机，
             // 与后面同机位重拍的 no-shadow-01 构图差出几十个像素——配对守卫会先把它抓出来（C1 复查时命中 36%）。
-            rig.SetOrbit(86f, 14f);
+            rig.SetOrbit(baseYaw, 14f);
             brain.ManualUpdate();
             camera.Render();
             brain.ManualUpdate();
@@ -393,7 +439,7 @@ namespace Mas3D.Editor
             float[] yaws = { 0f, 90f, 180f, 270f };
             for (var i = 0; i < yaws.Length; i++)
             {
-                rig.SetOrbit(86f + yaws[i], 14f);
+                rig.SetOrbit(baseYaw + yaws[i], 14f);
                 brain.ManualUpdate();
                 camera.Render();
 
@@ -452,7 +498,7 @@ namespace Mas3D.Editor
             if (hidePlayer)
             {
                 HidePlayer();
-                rig.SetOrbit(86f, 14f);
+                rig.SetOrbit(baseYaw, 14f);
                 brain.ManualUpdate();
                 camera.Render();
                 var roomShot = Path.Combine(shotDir, "room-shadow-01.png");
@@ -474,7 +520,7 @@ namespace Mas3D.Editor
                 foreach (var yaw in new[] { 0f, 180f })
                 {
                     // 同上：换机位后要收敛两帧，配对图才真正同构图。
-                    rig.SetOrbit(86f + yaw, 14f);
+                    rig.SetOrbit(baseYaw + yaw, 14f);
                     brain.ManualUpdate();
                     camera.Render();
                     brain.ManualUpdate();

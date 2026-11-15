@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 
 namespace Mas3D.Actions
@@ -17,6 +18,45 @@ namespace Mas3D.Actions
         /// pins as the floor.
         /// </summary>
         public const float BedPairOffset = 0.70f;
+
+        /// <summary>True when the active anchor table describes the multi-room flat.</summary>
+        public static bool IsFlatTable(AnchorTable table) =>
+            table != null && string.Equals(table.space, "flat", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// True when intimate pair actions (1-5) are permitted on <paramref name="seat"/>.
+        /// Legacy bedroom anchors carry no intimate flag and remain enabled; flat seats require
+        /// explicit <c>intimate == true</c> so peripheral seats like bedroom bed S3 refuse cleanly.
+        /// </summary>
+        public static bool AllowsIntimate(AnchorTable table, SeatEntry seat)
+        {
+            if (seat == null) return false;
+            return !IsFlatTable(table) || seat.intimate;
+        }
+
+        /// <summary>
+        /// Resolves the partner seat beside <paramref name="seat"/> on a multi-seat fixture such as
+        /// the living room sofa (S1 &lt;-&gt; S2). Falls back to <see cref="BedPair"/> when no
+        /// matching sibling intimate seat exists.
+        /// </summary>
+        public static SeatEntry PartnerSeat(AnchorTable table, SeatEntry seat)
+        {
+            if (seat == null) return null;
+            if (table != null && IsFlatTable(table) && table.seats != null)
+            {
+                for (var i = 0; i < table.seats.Length; i++)
+                {
+                    var candidate = table.seats[i];
+                    if (candidate == null || string.Equals(candidate.id, seat.id, StringComparison.Ordinal)) continue;
+                    if (!candidate.intimate) continue;
+                    if (!string.IsNullOrEmpty(seat.pose) &&
+                        !string.Equals(candidate.pose, seat.pose, StringComparison.OrdinalIgnoreCase)) continue;
+                    return candidate;
+                }
+            }
+
+            return BedPair(seat);
+        }
 
         /// <summary>
         /// The player's half of a bed seat: the same height, surface and facing, moved

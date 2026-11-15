@@ -57,9 +57,13 @@ namespace Mas3D.Tests.EditMode
             var scene = EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Additive);
             Assert.IsTrue(scene.IsValid(), "打不开 " + ScenePath);
             _scene = scene;
-            _lights = Object.FindObjectsByType<Light>(FindObjectsSortMode.None)
-                .Where(l => l.gameObject.scene == scene)
-                .ToArray();
+            var lightsRoot = Object.FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+                .FirstOrDefault(t => t.gameObject.scene == scene && t.name == "room-lights");
+            _lights = lightsRoot != null
+                ? lightsRoot.GetComponentsInChildren<Light>(true)
+                : Object.FindObjectsByType<Light>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+                    .Where(l => l.gameObject.scene == scene)
+                    .ToArray();
 
             // 檐口取四面墙里较低的一对墙顶：出图时灯就是按这个高度摆的。
             var ceiling = _lights.FirstOrDefault(l => l.name.StartsWith("ceiling-glow-"));
@@ -162,9 +166,13 @@ namespace Mas3D.Tests.EditMode
         [Test]
         public void TheFurnitureCastsShadowsAndTheShellDoesNot()
         {
-            var room = Object.FindObjectsByType<MeshRenderer>(FindObjectsSortMode.None)
-                .Where(r => r.gameObject.scene == _scene)
-                .ToArray();
+            var boot = Object.FindObjectsByType<RoomBootstrap>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+                .FirstOrDefault(b => b.gameObject.scene == _scene);
+            var room = boot != null && boot.Room != null
+                ? boot.Room.GetComponentsInChildren<MeshRenderer>(true)
+                : Object.FindObjectsByType<MeshRenderer>(FindObjectsInactive.Include, FindObjectsSortMode.None)
+                    .Where(r => r.gameObject.scene == _scene)
+                    .ToArray();
 
             // 2026-11-14：场景里的房间资产换成了按 Blender 集合导出的新卧室（节点名 mesh_###），
             // 老的 Mesh_0121out 这一套名字在新资产里根本不存在 —— 这不是「影子没了」，

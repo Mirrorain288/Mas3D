@@ -50,6 +50,55 @@ namespace Mas3D.Room
         public float TargetAngle => IsOpen ? SwingAngle : ClosedAngle;
         public Vector3 InteractionCenter => GetWorldBounds().center;
 
+        /// <summary>Live world-space center of this door's handle mesh, falling back to InteractionCenter.</summary>
+        public Vector3 HandleWorldPosition()
+        {
+            EnsureHandleCached();
+            if (_handleRenderer != null && _handleRenderer.enabled) return _handleRenderer.bounds.center;
+            if (_handleTransform != null) return _handleTransform.position;
+            return InteractionCenter;
+        }
+
+        string ResolveHandleMeshName()
+        {
+            for (var i = 0; i < InteriorSpecs.Length; i++)
+            {
+                if (string.Equals(InteriorSpecs[i].PivotName, DoorId, StringComparison.Ordinal) ||
+                    string.Equals(InteriorSpecs[i].PivotName, gameObject.name, StringComparison.Ordinal))
+                    return InteriorSpecs[i].HandleMesh;
+            }
+            return null;
+        }
+
+        void EnsureHandleCached()
+        {
+            if (_handleSearched) return;
+            _handleSearched = true;
+            var handleName = ResolveHandleMeshName();
+            if (string.IsNullOrEmpty(handleName)) return;
+
+            var renderers = GetComponentsInChildren<Renderer>(true);
+            for (var i = 0; i < renderers.Length; i++)
+            {
+                if (string.Equals(renderers[i].gameObject.name, handleName, StringComparison.Ordinal))
+                {
+                    _handleRenderer = renderers[i];
+                    _handleTransform = renderers[i].transform;
+                    return;
+                }
+            }
+
+            var transforms = GetComponentsInChildren<Transform>(true);
+            for (var i = 0; i < transforms.Length; i++)
+            {
+                if (string.Equals(transforms[i].name, handleName, StringComparison.Ordinal))
+                {
+                    _handleTransform = transforms[i];
+                    return;
+                }
+            }
+        }
+
         public bool AreCollidersEnabled
         {
             get
@@ -65,6 +114,9 @@ namespace Mas3D.Room
         bool _hasBaseRotation;
         Quaternion _baseLocalRotation = Quaternion.identity;
         float _progress;
+        bool _handleSearched;
+        Renderer _handleRenderer;
+        Transform _handleTransform;
 
         public static bool IsInteriorDoorMesh(string meshName)
         {

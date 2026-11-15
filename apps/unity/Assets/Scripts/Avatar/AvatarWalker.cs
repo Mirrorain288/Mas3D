@@ -50,6 +50,24 @@ namespace Mas3D.Avatar
 
         /// <summary>Probe capsule radius: the player's own 0.30, so "in her way" means "would collide".</summary>
         public const float ProbeRadius = 0.30f;
+
+        /// <summary>Live door lookup root (defaults to active scene InteractiveDoor instances).</summary>
+        public Transform DoorLookupRoot { get; set; }
+
+        /// <summary>True while paused at a closed doorway pushing it open with single-arm IK.</summary>
+        public bool OpeningDoor => Walking && _openingDoor;
+
+        /// <summary>The closed door currently being opened, if any.</summary>
+        public InteractiveDoor ActiveDoor { get; private set; }
+
+        const float DoorApproachDistance = 0.68f;
+        bool _openingDoor;
+        InteractiveDoor _doorTriggered;
+        bool _doorArmLeft;
+        bool _hasSavedDoorArm;
+        Quaternion _savedUpperRot;
+        Quaternion _savedLowerRot;
+        Quaternion _savedHandRot;
         public const float ProbeBottom = 0.30f;
         public const float ProbeTop = 1.00f;
 
@@ -191,6 +209,7 @@ namespace Mas3D.Avatar
 
             if (actor.Seat != null && actor.Seat.Seated) StandUpAt(actor, At);
 
+            ClearDoorState(actor);
             _route = route;
             _index = 1;
             Legs = 0;
@@ -223,9 +242,13 @@ namespace Mas3D.Avatar
 
             var root = Root;
             var node = _route[_index];
+            var prev = _index > 0 ? _route[_index - 1] : null;
+            var segEdge = prev != null ? EdgeTable.FindEdge(prev.Id, node.Id) : null;
             var last = _index == _route.Count - 1;
 
             var here = root.position;
+            if (HandleClosedDoorOnSegment(actor, segEdge, here, root, dt)) return;
+
             var toNode = node.Feet - here;
             toNode.y = 0f;
             var remaining = toNode.magnitude;
@@ -291,6 +314,7 @@ namespace Mas3D.Avatar
 
         void ArriveAt(AvatarActor actor, WalkNode node)
         {
+            ClearDoorState(actor);
             var root = Root;
             root.position = new Vector3(node.Feet.x, node.Feet.y, node.Feet.z);
             root.rotation = Quaternion.Euler(0f, node.FacingY, 0f);
@@ -344,21 +368,22 @@ namespace Mas3D.Avatar
 
             if (actor.Seat == null) return true;
 
-            // A bed is a second pose, not a second kind of seat: on S2 the hips ride on the mattress
-            // top (topY) with AvatarPose.BedSitting, and a chair sit would both bury her a centimetre
-            // into the duvet and drop the bed's seated lean. ActionDirector.BedSeatId is the one place
-            // that names the bed, so the walker reads it instead of keeping its own copy of "S2".
-            if (string.Equals(node.SeatId, ActionDirector.BedSeatId, StringComparison.OrdinalIgnoreCase))
+            var table = AnchorTable.Load();
+            var seat = table != null ? table.Seat(node.SeatId) : null;
+            var isBed = seat != null && !string.IsNullOrEmpty(seat.pose)
+                ? string.Equals(seat.pose, "bed", StringComparison.OrdinalIgnoreCase)
+                : string.Equals(node.SeatId, ActionDirector.BedSeatId, StringComparison.OrdinalIgnoreCase);
+
+            // A bed is a second pose, not a second kind of seat: hips ride on mattress topY with
+            // AvatarPose.BedSitting. Flat tables tag seats explicitly via pose="bed", while legacy
+            // anchors fall back to ActionDirector.BedSeatId.
+            if (isBed)
             {
-                // SitOnBed re-bases the idle and re-fits the body itself; repeating those here would
-                // capture the baseline twice and claim a pose that was never applied.
                 if (actor.SitOnBed(node.SeatId)) return true;
                 LastFaults = "床座 " + node.SeatId + " 坐不下去";
                 return false;
             }
 
-            var table = AnchorTable.Load();
-            var seat = table != null ? table.Seat(node.SeatId) : null;
             if (seat == null)
             {
                 LastFaults = "座 " + node.SeatId + " 不在 anchors.json 里，到了也没法坐下";
@@ -373,6 +398,7 @@ namespace Mas3D.Avatar
 
         void StopAt(WalkNode node, string reason)
         {
+            ClearDoorState(ResolveActor());
             Walking = false;
             Arrived = false;
             Target = null;
@@ -382,6 +408,7 @@ namespace Mas3D.Avatar
 
         void StopQuietly(string reason)
         {
+            ClearDoorState(ResolveActor());
             Walking = false;
             Arrived = false;
             Target = null;
@@ -546,6 +573,130 @@ namespace Mas3D.Avatar
             var dx = a.x - b.x;
             var dz = a.z - b.z;
             return Mathf.Sqrt(dx * dx + dz * dz);
+        }
+
+        bool HandleClosedDoorOnSegment(AvatarActor actor, WalkEdge segEdge, Vector3 here, Transform root, float dt)
+        {
+            if (segEdge == null || string.IsNullOrEmpty(segEdge.DoorId))
+            {
+                if (_openingDoor) ClearDoorState(actor);
+                return false;
+            }
+
+            var door = FindDoor(segEdge.DoorId);
+            if (door == null || (door.IsOpen && !door.IsMoving))
+            {
+                if (_openingDoor) ClearDoorState(actor);
+                return false;
+            }
+
+            var doorCenter = door.InteractionCenter;
+            var toDoorXZ = new Vector3(doorCenter.x - here.x, 0f, doorCenter.z - here.z);
+            var dist = toDoorXZ.magnitude;
+            if (_doorTriggered != door && dist > DoorApproachDistance)
+            {
+                return false;
+            }
+
+            var handlePos = door.HandleWorldPosition();
+            var toHandleXZ = new Vector3(handlePos.x - here.x, 0f, handlePos.z - here.z);
+            if (toHandleXZ.sqrMagnitude > 1e-5f) TurnTowards(YawOf(toHandleXZ), dt);
+
+            if (_doorTriggered != door)
+            {
+                _doorTriggered = door;
+                ActiveDoor = door;
+                _openingDoor = true;
+                ChooseAndSnapshotDoorArm(actor != null ? actor.Rig : null, handlePos);
+            }
+            else
+            {
+                _openingDoor = true;
+                ActiveDoor = door;
+            }
+
+            if (!door.IsOpen) door.SetOpen(true, false);
+
+            if (actor != null && actor.Rig != null)
+            {
+                DriveDoorReachIk(actor.Rig, handlePos, _doorArmLeft, root.right, root.forward);
+            }
+            return true;
+        }
+
+        void ChooseAndSnapshotDoorArm(AvatarRig rig, Vector3 handlePos)
+        {
+            _hasSavedDoorArm = false;
+            _doorArmLeft = false;
+            if (rig == null) return;
+
+            var lShoulder = rig.Bone(HumanBodyBones.LeftUpperArm);
+            var rShoulder = rig.Bone(HumanBodyBones.RightUpperArm);
+            if (lShoulder != null && rShoulder != null)
+            {
+                _doorArmLeft = Vector3.Distance(lShoulder.position, handlePos) < Vector3.Distance(rShoulder.position, handlePos);
+            }
+
+            var upper = rig.Bone(_doorArmLeft ? HumanBodyBones.LeftUpperArm : HumanBodyBones.RightUpperArm);
+            var lower = rig.Bone(_doorArmLeft ? HumanBodyBones.LeftLowerArm : HumanBodyBones.RightLowerArm);
+            var hand = rig.Bone(_doorArmLeft ? HumanBodyBones.LeftHand : HumanBodyBones.RightHand);
+            if (upper == null || lower == null || hand == null) return;
+
+            _savedUpperRot = upper.localRotation;
+            _savedLowerRot = lower.localRotation;
+            _savedHandRot = hand.localRotation;
+            _hasSavedDoorArm = true;
+        }
+
+        void ClearDoorState(AvatarActor actor)
+        {
+            if (_hasSavedDoorArm && actor != null && actor.Rig != null)
+            {
+                var upper = actor.Rig.Bone(_doorArmLeft ? HumanBodyBones.LeftUpperArm : HumanBodyBones.RightUpperArm);
+                var lower = actor.Rig.Bone(_doorArmLeft ? HumanBodyBones.LeftLowerArm : HumanBodyBones.RightLowerArm);
+                var hand = actor.Rig.Bone(_doorArmLeft ? HumanBodyBones.LeftHand : HumanBodyBones.RightHand);
+                if (upper != null) upper.localRotation = _savedUpperRot;
+                if (lower != null) lower.localRotation = _savedLowerRot;
+                if (hand != null) hand.localRotation = _savedHandRot;
+            }
+            _hasSavedDoorArm = false;
+            _openingDoor = false;
+            ActiveDoor = null;
+            _doorTriggered = null;
+        }
+
+        static void DriveDoorReachIk(AvatarRig rig, Vector3 target, bool left, Vector3 rootRight, Vector3 rootForward)
+        {
+            var upper = rig.Bone(left ? HumanBodyBones.LeftUpperArm : HumanBodyBones.RightUpperArm);
+            var lower = rig.Bone(left ? HumanBodyBones.LeftLowerArm : HumanBodyBones.RightLowerArm);
+            var hand = rig.Bone(left ? HumanBodyBones.LeftHand : HumanBodyBones.RightHand);
+            if (upper == null || lower == null || hand == null) return;
+
+            var approach = target - upper.position;
+            approach = approach.sqrMagnitude > 1e-8f ? approach.normalized : rootForward;
+            var wrist = target - approach * ActionGeometry.PalmForward;
+            var elbowOut = (left ? -rootRight : rootRight) * 0.45f + Vector3.down * 0.65f - rootForward * 0.25f;
+            var pole = (upper.position + wrist) * 0.5f + elbowOut.normalized * 0.35f;
+
+            TwoBoneIk.Solve(upper, lower, wrist, pole);
+
+            var look = target - hand.position;
+            if (look.sqrMagnitude > 1e-8f)
+            {
+                hand.rotation = Quaternion.LookRotation(look, Vector3.up);
+            }
+        }
+
+        InteractiveDoor FindDoor(string doorId)
+        {
+            if (string.IsNullOrEmpty(doorId)) return null;
+            var candidates = InteractiveDoor.FindActive(DoorLookupRoot != null ? DoorLookupRoot.gameObject : null);
+            for (var i = 0; i < candidates.Length; i++)
+            {
+                if (string.Equals(candidates[i].DoorId, doorId, StringComparison.Ordinal))
+                    return candidates[i];
+            }
+            return null;
         }
 
         AvatarActor ResolveActor()

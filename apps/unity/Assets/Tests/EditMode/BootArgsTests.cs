@@ -126,5 +126,14 @@ namespace Mas3D.Tests
             Assert.IsNull(boot.Token, "看起来像开关的值不算令牌");
             Assert.IsTrue(boot.NoBody, "-nobody 本身照旧生效");
         }
+
+        [Test]
+        public void ParsesBedroomSwitchWithAndWithoutExplicitValue()
+        {
+            Assert.IsFalse(BootArgs.Parse(new string[0]).Bedroom, "默认不进入单卧回退");
+            Assert.IsTrue(BootArgs.Parse(new[] { "-bedroom" }).Bedroom, "裸传 -bedroom 启用单卧回退");
+            Assert.IsTrue(BootArgs.Parse(new[] { "-bedroom", "1" }).Bedroom, "-bedroom 1 启用单卧回退");
+            Assert.IsFalse(BootArgs.Parse(new[] { "-bedroom", "0" }).Bedroom, "-bedroom 0 关闭单卧回退");
+        }
     }
 }

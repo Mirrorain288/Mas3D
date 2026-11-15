@@ -80,6 +80,8 @@ namespace Mas3D.Avatar
         /// </summary>
         void Start()
         {
+            var boot = FindAnyObjectByType<RoomBootstrap>();
+            if (boot != null && !boot.Booted) return;
             if (Seat != null && !Seat.Seated && Rig != null) SitAt(_seatId);
         }
 
@@ -143,6 +145,7 @@ namespace Mas3D.Avatar
             }
 
             Seat.Sit(seat);
+            if (Seat.Seated) _seatId = seatId;
             if (Idle != null) Idle.CaptureBaseline();
             FitBody();
         }

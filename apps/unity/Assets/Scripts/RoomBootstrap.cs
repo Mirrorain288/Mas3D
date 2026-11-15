@@ -42,14 +42,28 @@ namespace Mas3D
         public float FlatYaw = 90f;
 
         bool _flatForced;
+        bool _bedroomForced;
         GameObject _defaultRoom;
         GameObject _defaultLights;
         GameObject _defaultSkyCard;
 
-        /// <summary>Swaps the apartment in before <see cref="Boot"/> runs; used by the capture CLI.</summary>
+        /// <summary>True once <see cref="Boot"/> has finished initializing the room and actors.</summary>
+        public bool Booted { get; private set; }
+
+        /// <summary>Swaps the apartment in before or after <see cref="Boot"/> runs; default in Main.unity.</summary>
         public void ShowFlat()
         {
             _flatForced = true;
+            _bedroomForced = false;
+            if (Booted) ApplyRoomMode();
+        }
+
+        /// <summary>Switches to the legacy single bedroom (with bedroom anchors, lights, and sky card).</summary>
+        public void ShowBedroom()
+        {
+            _bedroomForced = true;
+            _flatForced = false;
+            if (Booted) ApplyRoomMode();
         }
 
         /// <summary>Feet position for that flat, in the flat's own coordinates.</summary>
@@ -91,6 +105,9 @@ namespace Mas3D
         /// </summary>
         public AvatarWalker Walker;
 
+        /// <summary>Serene low-frequency idle zone rotation when in flat mode.</summary>
+        public AvatarRoutine Routine;
+
         /// <summary>
         /// 键盘模式（E 进输入框、Esc 退出并锁走路键盘）。和 Actions 一样由 Boot 建、Boot 接线：
         /// 场景里不需要预先摆一个组件，而每个调用 Boot 的入口（CliPlayer 也算）都自动拿到。
@@ -130,69 +147,8 @@ namespace Mas3D
             ApplyStartupArgs(StartupArgs);
 
             CacheDefaultSceneObjects();
-
-            // -flat / -house walk alternate rooms instead of the default bedroom. Read here rather than
-            // in BootArgs so default-bedroom assets and scene-root lights/sky card never stay overlapping.
-            var flagFlat = System.Array.IndexOf(Environment.GetCommandLineArgs(), "-flat") >= 0;
-            var flatMode = FlatRoom != null && (_flatForced || flagFlat);
-            Debug.Log($"[room] flat={flatMode} forced={_flatForced} flag={flagFlat} flatRoom={(FlatRoom != null)} house={(HouseRoom != null)}");
-            var houseMode = !flatMode && HouseRoom != null && System.Array.IndexOf(Environment.GetCommandLineArgs(), "-house") >= 0;
-            if (flatMode)
-            {
-                SetDefaultBedroomActive(false);
-                Room = FlatRoom;
-                FlatRoom.SetActive(true);
-                if (HouseRoom != null && HouseRoom.activeSelf) HouseRoom.SetActive(false);
-            }
-            else if (houseMode)
-            {
-                SetDefaultBedroomActive(false);
-                Room = HouseRoom;
-                HouseRoom.SetActive(true);
-                if (FlatRoom != null && FlatRoom.activeSelf) FlatRoom.SetActive(false);
-            }
-            else
-            {
-                if (_defaultRoom != null) Room = _defaultRoom;
-                SetDefaultBedroomActive(true);
-                if (HouseRoom != null && HouseRoom.activeSelf) HouseRoom.SetActive(false);
-                if (FlatRoom != null && FlatRoom.activeSelf) FlatRoom.SetActive(false);
-            }
-
-            if (Room != null && AttachColliders) ColliderCount = RoomColliders.Attach(Room);
-            Anchors = AnchorTable.Load();
-
-            if (Player == null) Player = FindAnyObjectByType<PlayerMotor>();
+            ApplyRoomMode();
             if (Player == null) return;
-            Player.EnsureReady();
-            RoomLook.Apply();
-
-            var anchor = houseMode || flatMode ? null : Anchors != null ? Anchors.Anchor(SpawnAnchor) : null;
-            if (flatMode)
-            {
-                Player.Teleport(FlatSpawn, FlatYaw);
-                if (Player.Head != null) Player.Head.localRotation = Quaternion.identity;
-            }
-            else if (houseMode)
-            {
-                Player.Teleport(HouseSpawn, HouseYaw);
-                if (Player.Head != null) Player.Head.localRotation = Quaternion.identity;
-            }
-            else if (anchor != null)
-            {
-                var feet = anchor.Feet(SpawnLift);
-                Player.Teleport(feet, anchor.facingY);
-                if (Player.Head != null) Player.Head.localRotation = Quaternion.identity;
-            }
-
-            if (Rig == null) Rig = Player.GetComponent<PlayerCameraRig>();
-            if (Rig != null)
-            {
-                Rig.Build(Player.Head, OutputCamera != null ? OutputCamera : Camera.main);
-                if (flatMode) Rig.SetOrbit(FlatYaw, 14f);
-                else if (houseMode) Rig.SetOrbit(HouseYaw, 14f);
-                else if (anchor != null) Rig.SetOrbit(anchor.facingY, 14f);
-            }
 
             // 玩家身体接在相机之后：它要跟的是玩家的 transform 和眼睛高度，而"镜头贴到脸上时把头藏起来"
             // 那条线读的是 Rig.Distance —— Rig 这一行上面才建好。挂在玩家身上（不是 Boot 这个对象上），
@@ -254,7 +210,15 @@ namespace Mas3D
                 if (Walker == null) Walker = Actor.gameObject.AddComponent<AvatarWalker>();
                 Walker.Actor = Actor;
                 Walker.Conversation = Dialogue != null ? Dialogue : FindAnyObjectByType<ConversationController>();
+                Walker.DoorLookupRoot = Room != null ? Room.transform : null;
+                if (Actor.Rig != null && Actor.Seat != null)
+                {
+                    var targetSeat = string.IsNullOrEmpty(Actor.SeatId) ? AvatarActor.DefaultSeatId : Actor.SeatId;
+                    Actor.SitAt(targetSeat);
+                }
+                if (!Walker.Walking) Walker.ResnapToNearestNode();
             }
+            Actions.Walker = Walker;
 
             // 播报挂在会话语义那一层（同一 GameObject）：reply 一到就要用面板落字幕、用桥接的地址和令牌
             // 去请求语音。这里只交接对象，不读令牌 —— DialogueBridge 的执行顺序是 100、Boot 是默认 0，
@@ -275,6 +239,16 @@ namespace Mas3D
             // 面板优先取对话控制器手上那块；场景里没有对话时退回全局找 —— Bind(null) 是合法的，
             // 那种场景只剩 E/Esc 的空转，走路照常。
             var dialoguePanel = Dialogue != null && Dialogue.Panel != null ? Dialogue.Panel : FindAnyObjectByType<DialoguePanel>();
+            if (Actor != null && Walker != null)
+            {
+                if (Routine == null) Routine = Actor.GetComponent<AvatarRoutine>();
+                if (Routine == null) Routine = Actor.gameObject.AddComponent<AvatarRoutine>();
+                Routine.Walker = Walker;
+                Routine.Conversation = Walker.Conversation;
+                Routine.Panel = dialoguePanel;
+                Routine.Actions = Actions;
+                Routine.Enabled = FlatRoom != null && Room == FlatRoom;
+            }
             if (Modes == null)
             {
                 var modesGo = new GameObject("Input");
@@ -305,13 +279,146 @@ namespace Mas3D
                 }
                 Doors.Bind(Player, Rig, Actions, dialoguePanel, activeDoors);
             }
+            else if (Doors != null)
+            {
+                Doors.SetDoors(null);
+                if (Application.isPlaying) Destroy(Doors);
+                else DestroyImmediate(Doors);
+                Doors = null;
+            }
 
-            Debug.Log($"[room] colliders={ColliderCount} spawn={(houseMode ? "house" : anchor != null ? anchor.id : "none")} at={(houseMode ? HouseSpawn.x.ToString("F2") + "," + HouseSpawn.z.ToString("F2") : anchor != null ? anchor.x.ToString("F2") + "," + anchor.z.ToString("F2") : "-")}");
+            Booted = true;
+
+            Debug.Log($"[room] colliders={ColliderCount} spawn={(_bedroomForced || StartupArgs.Bedroom ? (Anchors != null && Anchors.Anchor(SpawnAnchor) != null ? Anchors.Anchor(SpawnAnchor).id : "none") : "flat")} at={Player.transform.position.x:F2},{Player.transform.position.z:F2}");
 
             // 自检只挂在 -selftest 上：它是玩家包的自动验收入口，编辑器里（命令行不带该参数）连组件都不创建，
             // 场景与既有测试不受影响。放最后是因为它一挂上就要用上面接好的桥接、面板和导演。
             if (!string.IsNullOrEmpty(StartupArgs.SelfTestPath) && GetComponent<PlayerSelfTest>() == null)
                 gameObject.AddComponent<PlayerSelfTest>();
+        }
+
+        void ApplyRoomMode()
+        {
+            CacheDefaultSceneObjects();
+
+            var args = Environment.GetCommandLineArgs();
+            var forceFlat = _flatForced || Array.IndexOf(args, "-flat") >= 0;
+            var flagBedroom = StartupArgs.Bedroom;
+            var houseMode = !forceFlat && !_bedroomForced && !flagBedroom && HouseRoom != null && Array.IndexOf(args, "-house") >= 0;
+            var flatMode = !houseMode && FlatRoom != null && (forceFlat || (!_bedroomForced && !flagBedroom));
+            var bedroomMode = !flatMode && !houseMode;
+
+            Debug.Log($"[room] flat={flatMode} bedroom={bedroomMode} forcedFlat={_flatForced} forcedBedroom={_bedroomForced} flatRoom={(FlatRoom != null)} house={(HouseRoom != null)}");
+
+            if (flatMode)
+            {
+                AnchorTable.SetActiveRelativePath(AnchorTable.FlatRelativePath);
+                SetDefaultBedroomActive(false);
+                Room = FlatRoom;
+                FlatRoom.SetActive(true);
+                if (HouseRoom != null && HouseRoom.activeSelf) HouseRoom.SetActive(false);
+            }
+            else if (houseMode)
+            {
+                AnchorTable.ResetActive();
+                SetDefaultBedroomActive(false);
+                Room = HouseRoom;
+                HouseRoom.SetActive(true);
+                if (FlatRoom != null && FlatRoom.activeSelf) FlatRoom.SetActive(false);
+            }
+            else
+            {
+                AnchorTable.ResetActive();
+                if (_defaultRoom != null) Room = _defaultRoom;
+                SetDefaultBedroomActive(true);
+                if (HouseRoom != null && HouseRoom.activeSelf) HouseRoom.SetActive(false);
+                if (FlatRoom != null && FlatRoom.activeSelf) FlatRoom.SetActive(false);
+            }
+
+            EdgeTable.Rebuild();
+
+            if (Room != null && AttachColliders) ColliderCount = RoomColliders.Attach(Room);
+            Anchors = AnchorTable.Load();
+
+            if (Player == null) Player = FindAnyObjectByType<PlayerMotor>();
+            if (Player == null) return;
+            Player.EnsureReady();
+            RoomLook.Apply();
+
+            var spawn = flatMode && Anchors != null && Anchors.defaultSpawn != null && Anchors.defaultSpawn.HasValue
+                ? Anchors.defaultSpawn
+                : null;
+            var anchor = houseMode || flatMode ? null : (Anchors != null ? Anchors.Anchor(SpawnAnchor) : null);
+            if (flatMode)
+            {
+                var feet = spawn != null ? spawn.Feet(SpawnLift) : FlatSpawn;
+                var yaw = spawn != null ? spawn.facingY : FlatYaw;
+                Player.Teleport(feet, yaw);
+                if (Player.Head != null) Player.Head.localRotation = Quaternion.identity;
+            }
+            else if (houseMode)
+            {
+                Player.Teleport(HouseSpawn, HouseYaw);
+                if (Player.Head != null) Player.Head.localRotation = Quaternion.identity;
+            }
+            else if (anchor != null)
+            {
+                var feet = anchor.Feet(SpawnLift);
+                Player.Teleport(feet, anchor.facingY);
+                if (Player.Head != null) Player.Head.localRotation = Quaternion.identity;
+            }
+
+            if (Rig == null) Rig = Player.GetComponent<PlayerCameraRig>();
+            if (Rig != null)
+            {
+                if (!Booted) Rig.Build(Player.Head, OutputCamera != null ? OutputCamera : Camera.main);
+                if (flatMode) Rig.SetOrbit(spawn != null ? spawn.facingY : FlatYaw, 14f);
+                else if (houseMode) Rig.SetOrbit(HouseYaw, 14f);
+                else if (anchor != null) Rig.SetOrbit(anchor.facingY, 14f);
+            }
+
+            if (!Booted) return;
+
+            if (Actor != null)
+            {
+                var targetSeat = string.IsNullOrEmpty(Actor.SeatId) ? AvatarActor.DefaultSeatId : Actor.SeatId;
+                if (Actor.Rig != null && Actor.Seat != null) Actor.SitAt(targetSeat);
+                if (Walker != null)
+                {
+                    Walker.Actor = Actor;
+                    Walker.DoorLookupRoot = Room != null ? Room.transform : null;
+                    if (!Walker.Walking) Walker.ResnapToNearestNode();
+                }
+                if (Routine != null) Routine.Enabled = FlatRoom != null && Room == FlatRoom;
+            }
+
+            var dialoguePanel = Dialogue != null && Dialogue.Panel != null ? Dialogue.Panel : FindAnyObjectByType<DialoguePanel>();
+            if (Hotkeys != null) Hotkeys.Bind(Actions, Player, dialoguePanel, Anchors);
+
+            var activeDoors = InteractiveDoor.FindActive(Room);
+            if (activeDoors.Length > 0 && Modes != null)
+            {
+                if (Doors == null)
+                {
+                    var inputGo = Modes.gameObject;
+                    Doors = inputGo.GetComponent<DoorInteractor>();
+                    if (Doors == null) Doors = inputGo.AddComponent<DoorInteractor>();
+                }
+                Doors.Bind(Player, Rig, Actions, dialoguePanel, activeDoors);
+            }
+            else if (Doors != null)
+            {
+                Doors.SetDoors(null);
+                if (Application.isPlaying) Destroy(Doors);
+                else DestroyImmediate(Doors);
+                Doors = null;
+            }
+        }
+
+        void OnDestroy()
+        {
+            AnchorTable.ResetActive();
+            EdgeTable.Rebuild();
         }
 
         /// <summary>
