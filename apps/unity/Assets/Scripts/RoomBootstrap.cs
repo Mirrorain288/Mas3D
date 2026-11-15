@@ -42,6 +42,9 @@ namespace Mas3D
         public float FlatYaw = 90f;
 
         bool _flatForced;
+        GameObject _defaultRoom;
+        GameObject _defaultLights;
+        GameObject _defaultSkyCard;
 
         /// <summary>Swaps the apartment in before <see cref="Boot"/> runs; used by the capture CLI.</summary>
         public void ShowFlat()
@@ -126,26 +129,32 @@ namespace Mas3D
             StartupArgs = BootArgs.Parse(Environment.GetCommandLineArgs());
             ApplyStartupArgs(StartupArgs);
 
-            // -house 1 walks the flat instead of the bedroom. Read here rather than in BootArgs: it
-            // only swaps one scene reference, and every other switch stays exactly as tested.
+            CacheDefaultSceneObjects();
+
+            // -flat / -house walk alternate rooms instead of the default bedroom. Read here rather than
+            // in BootArgs so default-bedroom assets and scene-root lights/sky card never stay overlapping.
             var flagFlat = System.Array.IndexOf(Environment.GetCommandLineArgs(), "-flat") >= 0;
             var flatMode = FlatRoom != null && (_flatForced || flagFlat);
             Debug.Log($"[room] flat={flatMode} forced={_flatForced} flag={flagFlat} flatRoom={(FlatRoom != null)} house={(HouseRoom != null)}");
             var houseMode = !flatMode && HouseRoom != null && System.Array.IndexOf(Environment.GetCommandLineArgs(), "-house") >= 0;
             if (flatMode)
             {
+                SetDefaultBedroomActive(false);
                 Room = FlatRoom;
                 FlatRoom.SetActive(true);
                 if (HouseRoom != null && HouseRoom.activeSelf) HouseRoom.SetActive(false);
             }
             else if (houseMode)
             {
+                SetDefaultBedroomActive(false);
                 Room = HouseRoom;
                 HouseRoom.SetActive(true);
                 if (FlatRoom != null && FlatRoom.activeSelf) FlatRoom.SetActive(false);
             }
             else
             {
+                if (_defaultRoom != null) Room = _defaultRoom;
+                SetDefaultBedroomActive(true);
                 if (HouseRoom != null && HouseRoom.activeSelf) HouseRoom.SetActive(false);
                 if (FlatRoom != null && FlatRoom.activeSelf) FlatRoom.SetActive(false);
             }
@@ -333,6 +342,37 @@ namespace Mas3D
             Debug.Log("[boot] bridge=" + host + ":" + port
                 + " token=" + (!string.IsNullOrEmpty(boot.Token) ? "set" : "disk")
                 + " selftest=" + (!string.IsNullOrEmpty(boot.SelfTestPath) ? boot.SelfTestPath : "none"));
+        }
+
+        void CacheDefaultSceneObjects()
+        {
+            if (_defaultRoom == null && Room != null && Room != FlatRoom && Room != HouseRoom)
+                _defaultRoom = Room;
+            if (_defaultLights == null) _defaultLights = FindSceneRoot("room-lights");
+            if (_defaultSkyCard == null) _defaultSkyCard = FindSceneRoot("night-sky-card");
+        }
+
+        void SetDefaultBedroomActive(bool active)
+        {
+            if (_defaultRoom != null && _defaultRoom != FlatRoom && _defaultRoom != HouseRoom && _defaultRoom.activeSelf != active)
+                _defaultRoom.SetActive(active);
+            if (_defaultLights != null && _defaultLights.activeSelf != active)
+                _defaultLights.SetActive(active);
+            if (_defaultSkyCard != null && _defaultSkyCard.activeSelf != active)
+                _defaultSkyCard.SetActive(active);
+        }
+
+        GameObject FindSceneRoot(string rootName)
+        {
+            var scene = gameObject.scene;
+            if (!scene.IsValid()) return null;
+            var roots = scene.GetRootGameObjects();
+            for (var i = 0; i < roots.Length; i++)
+            {
+                if (string.Equals(roots[i].name, rootName, StringComparison.Ordinal))
+                    return roots[i];
+            }
+            return null;
         }
     }
 }

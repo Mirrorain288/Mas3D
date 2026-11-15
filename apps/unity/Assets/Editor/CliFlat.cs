@@ -16,6 +16,10 @@ namespace Mas3D.Editor
         public const string Source = "Assets/_Local/room/mita-flat.glb";
         public const string Output = "Assets/_Local/room/Flat.prefab";
         public const float FlatScale = 1.5f;
+        public const float MinFloorUpDot = 0.7f;
+        public const float MaxFloorThickness = 0.35f;
+        public const float MinFloorUpwardArea = 1.5f;
+        public const float LivingCeilingSealThickness = 0.12f;
         const string ScenePath = "Assets/Scenes/Main.unity";
 
         public static void Bake()
@@ -65,6 +69,7 @@ namespace Mas3D.Editor
             }
 
             var colliders = AttachColliders(room);
+            var ceilingSeal = AddLivingCeilingSeal(room, bounds);
             var lamps = Light(room, bounds);
             var shell = room.AddComponent<HouseLighting>();
             shell.Ambient = 1f;
@@ -76,7 +81,7 @@ namespace Mas3D.Editor
                 EditorApplication.Exit(1);
                 return;
             }
-            Debug.Log($"[flat] baked {Output} doors={doorCount} colliders={colliders} lamps={lamps} bounds={bounds.size}");
+            Debug.Log($"[flat] baked {Output} doors={doorCount} colliders={colliders} ceilingSeal={ceilingSeal} lamps={lamps} bounds={bounds.size}");
             EditorApplication.Exit(0);
         }
 
@@ -356,7 +361,7 @@ namespace Mas3D.Editor
             var views = new (string name, Vector3 eye, Vector3 look)[]
             {
                 ("flat-bed", new Vector3(-3.20f, 1.42f, 0.95f) * FlatScale, new Vector3(0.60f, 1.15f, -0.40f) * FlatScale),
-                ("flat-living", new Vector3(-0.60f, 1.50f, 1.30f) * FlatScale, new Vector3(4.20f, 1.20f, -0.60f) * FlatScale),
+                ("flat-living", new Vector3(-0.75f, 1.40f, 0.70f) * FlatScale, new Vector3(4.20f, 1.25f, -0.60f) * FlatScale),
                 ("flat-dining", new Vector3(5.00f, 1.45f, 2.60f) * FlatScale, new Vector3(7.40f, 1.15f, -0.80f) * FlatScale),
                 ("flat-kitchen", new Vector3(4.95f, 1.45f, 2.60f) * FlatScale, new Vector3(7.40f, 1.15f, -1.40f) * FlatScale),
                 ("flat-bath", new Vector3(-5.55f, 1.45f, 0.70f) * FlatScale, new Vector3(-7.60f, 1.10f, -0.60f) * FlatScale),
@@ -407,13 +412,114 @@ namespace Mas3D.Editor
                 if (!r.enabled) continue;
                 var b = r.bounds;
                 lines.Add($"{r.name},{b.min.x:F2},{b.min.y:F2},{b.min.z:F2},{b.max.x:F2},{b.max.y:F2},{b.max.z:F2},{b.center.x:F2},{b.center.y:F2},{b.center.z:F2}");
-                var area = b.size.x * b.size.z;
-                if (b.size.y < 0.35f && area > 1.5f) floors.Add($"[floor] {r.name} x {b.min.x:F2}..{b.max.x:F2} z {b.min.z:F2}..{b.max.z:F2} y {b.min.y:F2}..{b.max.y:F2} area {area:F1}");
+                if (IsWalkableFloorCandidate(r, out var upArea))
+                    floors.Add($"[floor] {r.name} x {b.min.x:F2}..{b.max.x:F2} z {b.min.z:F2}..{b.max.z:F2} y {b.min.y:F2}..{b.max.y:F2} area {upArea:F1}");
             }
             File.WriteAllLines(path, lines);
             foreach (var f2 in floors) Debug.Log(f2);
             Debug.Log($"[flat] map rows={lines.Count - 1} -> {path}");
             EditorApplication.Exit(0);
+        }
+
+        /// <summary>
+        /// Sums world XZ projected area across triangles whose outward normal points upward
+        /// (<paramref name="minUpDot"/> or higher), excluding downward ceilings and thin bezels.
+        /// </summary>
+        public static float ComputeUpwardProjectedArea(Mesh mesh, Matrix4x4 localToWorld, float minUpDot = MinFloorUpDot)
+        {
+            if (mesh == null || !mesh.isReadable || mesh.vertexCount == 0) return 0f;
+            var vertices = mesh.vertices;
+            var triangles = mesh.triangles;
+            var windingSign = localToWorld.determinant < 0f ? -1f : 1f;
+            var areaSum = 0f;
+            for (var i = 0; i + 2 < triangles.Length; i += 3)
+            {
+                var p0 = localToWorld.MultiplyPoint3x4(vertices[triangles[i]]);
+                var p1 = localToWorld.MultiplyPoint3x4(vertices[triangles[i + 1]]);
+                var p2 = localToWorld.MultiplyPoint3x4(vertices[triangles[i + 2]]);
+                var cross = Vector3.Cross(p1 - p0, p2 - p0) * windingSign;
+                var mag = cross.magnitude;
+                if (mag <= 1e-8f) continue;
+                if (cross.y / mag < minUpDot) continue;
+                areaSum += cross.y * 0.5f;
+            }
+            return areaSum;
+        }
+
+        /// <summary>
+        /// Evaluates whether <paramref name="renderer"/> represents a broad upward-facing floor slab
+        /// rather than a downward ceiling panel or wide-AABB ceiling trim / bezel ring.
+        /// </summary>
+        public static bool IsWalkableFloorCandidate(Renderer renderer, out float upwardArea)
+        {
+            upwardArea = 0f;
+            if (renderer == null || !renderer.enabled) return false;
+            var b = renderer.bounds;
+            if (b.size.y >= MaxFloorThickness) return false;
+            var filter = renderer.GetComponent<MeshFilter>();
+            if (filter == null || filter.sharedMesh == null) return false;
+            upwardArea = ComputeUpwardProjectedArea(filter.sharedMesh, renderer.transform.localToWorldMatrix, MinFloorUpDot);
+            return upwardArea > MinFloorUpwardArea;
+        }
+
+        /// <summary>
+        /// Adds an invisible physics-only BoxCollider slab sealing the living room + vestibule overhead
+        /// without occluding the top-down cutaway camera used in flat-wide inspection shots.
+        /// </summary>
+        static bool AddLivingCeilingSeal(GameObject room, Bounds fallbackBounds)
+        {
+            Renderer livingFloor = null;
+            Renderer livingSoffit = null;
+            Renderer livingCenterCeiling = null;
+            foreach (var r in room.GetComponentsInChildren<Renderer>(true))
+            {
+                if (!r.enabled) continue;
+                if (r.name == "mesh_307.002") livingFloor = r;
+                else if (r.name == "mesh_334.001") livingSoffit = r;
+                else if (r.name == "mesh_193") livingCenterCeiling = r;
+            }
+
+            if (livingFloor == null && livingSoffit == null && livingCenterCeiling == null)
+            {
+                Debug.LogWarning("[flat] LivingCeilingSeal skipped: no living room ceiling/floor reference meshes found");
+                return false;
+            }
+
+            var footprint = livingFloor != null ? livingFloor.bounds
+                : (livingSoffit != null ? livingSoffit.bounds : livingCenterCeiling.bounds);
+            if (livingSoffit != null) EncapsulateXZ(ref footprint, livingSoffit.bounds);
+            if (livingCenterCeiling != null) EncapsulateXZ(ref footprint, livingCenterCeiling.bounds);
+
+            // Slight perimeter overlap (8 cm) closes micro-gaps against adjacent bedroom/kitchen walls.
+            const float wallMargin = 0.08f;
+            var minX = footprint.min.x - wallMargin;
+            var maxX = footprint.max.x + wallMargin;
+            var minZ = footprint.min.z - wallMargin;
+            var maxZ = footprint.max.z + wallMargin;
+
+            var topY = 0f;
+            if (livingSoffit != null) topY = Mathf.Max(topY, livingSoffit.bounds.max.y);
+            if (livingCenterCeiling != null) topY = Mathf.Max(topY, livingCenterCeiling.bounds.max.y);
+            if (topY <= 0.1f) topY = Mathf.Max(fallbackBounds.max.y, 1.83f * FlatScale);
+
+            var sealGo = new GameObject("LivingCeilingSeal");
+            sealGo.transform.SetParent(room.transform, false);
+            var box = sealGo.AddComponent<BoxCollider>();
+            box.center = new Vector3((minX + maxX) * 0.5f, topY + LivingCeilingSealThickness * 0.5f - 0.005f, (minZ + maxZ) * 0.5f);
+            box.size = new Vector3(maxX - minX, LivingCeilingSealThickness, maxZ - minZ);
+            Debug.Log($"[flat] LivingCeilingSeal center={box.center} size={box.size}");
+            return true;
+        }
+
+        static void EncapsulateXZ(ref Bounds target, Bounds extra)
+        {
+            var min = target.min;
+            var max = target.max;
+            min.x = Mathf.Min(min.x, extra.min.x);
+            min.z = Mathf.Min(min.z, extra.min.z);
+            max.x = Mathf.Max(max.x, extra.max.x);
+            max.z = Mathf.Max(max.z, extra.max.z);
+            target.SetMinMax(min, max);
         }
 
         /// <summary>Top of the largest horizontal surface: the floor everything else stands on.</summary>
@@ -423,13 +529,10 @@ namespace Mas3D.Editor
             var bestArea = 0f;
             foreach (var r in room.GetComponentsInChildren<Renderer>(true))
             {
-                if (!r.enabled) continue;
-                var b = r.bounds;
-                if (b.size.y > 0.35f) continue;
-                var area = b.size.x * b.size.z;
+                if (!IsWalkableFloorCandidate(r, out var area)) continue;
                 if (area <= bestArea) continue;
                 bestArea = area;
-                best = b.max.y;
+                best = r.bounds.max.y;
             }
             return bestArea > 0f ? best : Measure(room).min.y;
         }
