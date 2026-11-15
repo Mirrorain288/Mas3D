@@ -673,6 +673,16 @@ namespace Mas3D.Editor
         }
 
         public const string SkyPath = "Assets/_Local/sky/night-sky-2k.jpg";
+        public const string ImportedWindowMesh = "mesh_219";
+
+        const float SkyCardWallGap = 0.08f;
+        const float SkyCardMarginX = 0.40f;
+        const float SkyCardMarginY = 0.30f;
+        const float SkyCardWallInsetX = 0.55f;
+        const float SkyCardFloorClearance = 0.06f;
+        const float SkyCardEaveClearance = 0.55f;
+        static readonly Vector2 SkyCardUvScale = new Vector2(0.42f, 0.55f);
+        static readonly Vector2 SkyCardUvOffset = new Vector2(0.29f, 0.28f);
 
         /// <summary>
         /// The room is closed except for the window, so whatever the camera clears to is the
@@ -704,50 +714,52 @@ namespace Mas3D.Editor
         }
 
         /// <summary>
-        /// A huge unlit card parked just outside the window wall. Assigning RenderSettings.skybox
-        /// would also feed URP's default reflection probe, and every glossy glTFast surface in the
-        /// room then mirrored the star field as blocky white patches; a card is invisible to
-        /// lighting and only shows through the window hole.
+        /// Single-sided night sky quad anchored snugly behind the bedroom's -Z window (mesh_219)
+        /// with modest indoor parallax margins clamped inside the wall/eave silhouette. Facing +Z
+        /// with CullMode.Back lets indoor views read stars while exterior -Z/orbit views cull it.
         /// </summary>
-        public static GameObject BuildSkyCard(Bounds bounds, float wallX)
+        public static GameObject BuildWindowSkyCard(GameObject room, Bounds fallbackBounds)
         {
-            var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(SkyPath);
-            if (tex == null)
-            {
-                Debug.Log("[sky] missing " + SkyPath);
-                return null;
-            }
+            var windowObj = room != null ? FindByName(room, ImportedWindowMesh) : null;
+            var windowRenderer = windowObj != null ? windowObj.GetComponent<Renderer>() : null;
+            if (windowRenderer == null || !windowRenderer.enabled)
+                return BuildSkyCardZ(fallbackBounds, fallbackBounds.min.z);
 
-            var shader = Shader.Find("Universal Render Pipeline/Unlit");
-            if (shader == null) shader = Shader.Find("Unlit/Texture");
-            var mat = new Material(shader) { name = "night-sky-card" };
-            if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", tex);
-            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", new Color(1.35f, 1.35f, 1.5f, 1f));
-            if (mat.HasProperty("_MainTex")) mat.SetTexture("_MainTex", tex);
-            if (mat.HasProperty("_Color")) mat.SetColor("_Color", new Color(1.35f, 1.35f, 1.5f, 1f));
-            if (mat.HasProperty("_Cull")) mat.SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Off);
+            var r = RendererBounds(room);
+            if (r.size == Vector3.zero) r = fallbackBounds;
+            var w = windowRenderer.bounds;
 
-            var card = GameObject.CreatePrimitive(PrimitiveType.Quad);
-            card.name = "night-sky-card";
-            var collider = card.GetComponent<Collider>();
-            if (collider != null) UnityEngine.Object.DestroyImmediate(collider);
-            card.GetComponent<MeshRenderer>().sharedMaterial = mat;
-            card.GetComponent<MeshRenderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            card.GetComponent<MeshRenderer>().receiveShadows = false;
+            var minLimitX = Mathf.Min(w.min.x, r.min.x + SkyCardWallInsetX);
+            var maxLimitX = Mathf.Max(w.max.x, r.max.x - SkyCardWallInsetX);
+            var minX = Mathf.Max(minLimitX, w.min.x - SkyCardMarginX);
+            var maxX = Mathf.Min(maxLimitX, w.max.x + SkyCardMarginX);
 
-            var height = bounds.max.y - 0.4f;
-            card.transform.position = new Vector3(wallX + 0.55f, height * 0.55f, bounds.center.z);
-            card.transform.rotation = Quaternion.Euler(0f, -90f, 0f);
-            card.transform.localScale = new Vector3(bounds.size.z * 1.15f, height * 1.1f, 1f);
-            Debug.Log($"[sky] card {card.transform.localScale.x:F2}x{card.transform.localScale.y:F2} at x={card.transform.position.x:F2}");
-            return card;
+            var minLimitY = Mathf.Min(w.min.y, r.min.y + SkyCardFloorClearance);
+            var maxLimitY = Mathf.Max(w.max.y, r.max.y - SkyCardEaveClearance);
+            var minY = Mathf.Max(minLimitY, w.min.y - SkyCardMarginY);
+            var maxY = Mathf.Min(maxLimitY, w.max.y + SkyCardMarginY);
+
+            var pos = new Vector3((minX + maxX) * 0.5f, (minY + maxY) * 0.5f, w.min.z - SkyCardWallGap);
+            var size = new Vector2(Mathf.Max(0.2f, maxX - minX), Mathf.Max(0.2f, maxY - minY));
+            return CreateSkyCard(pos, size);
         }
 
         /// <summary>
-        /// Same card, but parked outside a wall that faces -Z. The imported bedroom puts its
-        /// window on the -Z wall, so the old x-axis placement would hang the sky beside the room.
+        /// Fallback window-cropped single-sided card parked just outside the -Z wall when a scene
+        /// or stripped test fixture does not carry mesh_219 explicitly.
         /// </summary>
         public static GameObject BuildSkyCardZ(Bounds bounds, float wallZ)
+        {
+            var width = Mathf.Clamp(bounds.size.x * 0.44f, 0.8f, Mathf.Max(0.8f, bounds.size.x - SkyCardWallInsetX * 2f));
+            var height = Mathf.Clamp(bounds.size.y * 0.52f, 0.8f, Mathf.Max(0.8f, bounds.size.y - SkyCardFloorClearance - SkyCardEaveClearance));
+            var lowY = bounds.min.y + SkyCardFloorClearance + height * 0.5f;
+            var highY = bounds.max.y - SkyCardEaveClearance - height * 0.5f;
+            var centerY = lowY <= highY ? Mathf.Clamp(bounds.min.y + bounds.size.y * 0.34f, lowY, highY) : bounds.center.y;
+            var pos = new Vector3(bounds.center.x, centerY, wallZ - SkyCardWallGap);
+            return CreateSkyCard(pos, new Vector2(width, height));
+        }
+
+        static GameObject CreateSkyCard(Vector3 position, Vector2 size)
         {
             var tex = AssetDatabase.LoadAssetAtPath<Texture2D>(SkyPath);
             if (tex == null)
@@ -759,25 +771,36 @@ namespace Mas3D.Editor
             var shader = Shader.Find("Universal Render Pipeline/Unlit");
             if (shader == null) shader = Shader.Find("Unlit/Texture");
             var mat = new Material(shader) { name = "night-sky-card" };
-            if (mat.HasProperty("_BaseMap")) mat.SetTexture("_BaseMap", tex);
-            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", new Color(1.35f, 1.35f, 1.5f, 1f));
-            if (mat.HasProperty("_MainTex")) mat.SetTexture("_MainTex", tex);
-            if (mat.HasProperty("_Color")) mat.SetColor("_Color", new Color(1.35f, 1.35f, 1.5f, 1f));
-            if (mat.HasProperty("_Cull")) mat.SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Off);
+            var tint = new Color(1.35f, 1.35f, 1.5f, 1f);
+            if (mat.HasProperty("_BaseMap"))
+            {
+                mat.SetTexture("_BaseMap", tex);
+                mat.SetTextureScale("_BaseMap", SkyCardUvScale);
+                mat.SetTextureOffset("_BaseMap", SkyCardUvOffset);
+            }
+            if (mat.HasProperty("_BaseColor")) mat.SetColor("_BaseColor", tint);
+            if (mat.HasProperty("_MainTex"))
+            {
+                mat.SetTexture("_MainTex", tex);
+                mat.SetTextureScale("_MainTex", SkyCardUvScale);
+                mat.SetTextureOffset("_MainTex", SkyCardUvOffset);
+            }
+            if (mat.HasProperty("_Color")) mat.SetColor("_Color", tint);
+            if (mat.HasProperty("_Surface")) mat.SetFloat("_Surface", 0f);
+            if (mat.HasProperty("_Cull")) mat.SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Back);
 
             var card = GameObject.CreatePrimitive(PrimitiveType.Quad);
             card.name = "night-sky-card";
             var collider = card.GetComponent<Collider>();
             if (collider != null) UnityEngine.Object.DestroyImmediate(collider);
-            card.GetComponent<MeshRenderer>().sharedMaterial = mat;
-            card.GetComponent<MeshRenderer>().shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-            card.GetComponent<MeshRenderer>().receiveShadows = false;
+            var renderer = card.GetComponent<MeshRenderer>();
+            renderer.sharedMaterial = mat;
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
 
-            var height = bounds.max.y - 0.4f;
-            card.transform.position = new Vector3(bounds.center.x, height * 0.55f, wallZ - 0.55f);
-            card.transform.rotation = Quaternion.Euler(0f, 180f, 0f);
-            card.transform.localScale = new Vector3(bounds.size.x * 1.15f, height * 1.1f, 1f);
-            Debug.Log($"[sky] card {card.transform.localScale.x:F2}x{card.transform.localScale.y:F2} at z={card.transform.position.z:F2}");
+            card.transform.SetPositionAndRotation(position, Quaternion.Euler(0f, 180f, 0f));
+            card.transform.localScale = new Vector3(size.x, size.y, 1f);
+            Debug.Log($"[sky] card {size.x:F2}x{size.y:F2} at ({position.x:F2},{position.y:F2},{position.z:F2}) cull=Back facing=+Z");
             return card;
         }
 

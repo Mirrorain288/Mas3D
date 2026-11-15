@@ -277,7 +277,7 @@ namespace Mas3D.Editor
                 RoomDress.CreateLights(room, rb, rb.max.y, tuning);
                 RoomDress.ApplyColour(tuning);
                 if (ParseFloat(args, "-sky", 1f) > 0.5f)
-                    RoomDress.BuildSkyCardZ(rb, rb.min.z);
+                    RoomDress.BuildWindowSkyCard(room, rb);
                 Debug.Log($"[cap] lights only bounds y={rb.min.y:F2}..{rb.max.y:F2}");
                 dressed = true;
             }
@@ -442,11 +442,10 @@ namespace Mas3D.Editor
             cam.nearClipPlane = 0.05f;
             cam.farClipPlane = 120f;
             // The room is airtight apart from the window opening, so the background is what the
-            // glass shows: a real equirect night sky instead of flat black.
-            // -lightsOnly already hung its own card on the -Z wall; a second one beside the room
-            // would be visible past the corner once the camera turns.
+            // glass shows: a real equirect night sky instead of flat black. -lightsOnly already hung
+            // its own single-sided window card on the -Z wall.
             if (dressed && ParseFloat(args, "-lightsOnly", 0f) < 0.5f && ParseFloat(args, "-sky", 1f) > 0.5f)
-                RoomDress.BuildSkyCard(bounds, bounds.max.x);
+                RoomDress.BuildWindowSkyCard(room, bounds);
             cam.clearFlags = CameraClearFlags.SolidColor;
             cam.backgroundColor = new Color(0.05f, 0.06f, 0.09f, 1f);
             cam.allowHDR = false;

@@ -54,7 +54,7 @@ namespace Mas3D.Editor
             var materials = RoomMaterials.Rebuild(room, true, false);
             var dressing = RoomDress.Apply(room, true, true, new RoomDress.Tuning());
             RoomDress.ApplyNightSky();
-            RoomDress.BuildSkyCard(bounds, bounds.max.x);
+            RoomDress.BuildWindowSkyCard(room, bounds);
             Debug.Log($"[player] materials={materials} eave={dressing.eaveY:F2}");
 
             var player = BuildPlayer();
